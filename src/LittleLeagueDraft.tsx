@@ -313,8 +313,8 @@ const LittleLeagueDraft = () => {
   }
 
   if (step === 'teams') {
-    return <TeamSetup divisions={divisions} onComplete={finishAssignment} />;
-  }
+  return <TeamSetup divisions={divisions} players={players} onComplete={finishAssignment} />;
+}
 
   if (step === 'draft') {
     if (!draftState) {
@@ -647,25 +647,119 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
   );
 };
 
-const TeamSetup = ({ divisions, onComplete }: { divisions: any[]; onComplete: (teams: Record<string, string[]>) => void }) => {
-  const [divisionTeams, setDivisionTeams] = useState<Record<string, string[]>>({ Rookies: [], Majors: [], Minors: [], Juniors: [] });
-  const [teamCounts, setTeamCounts] = useState<Record<string, number>>({ Rookies: 4, Majors: 4, Minors: 4, Juniors: 4 });
+// before: const TeamSetup = ({ divisions, onComplete }) => {
+const TeamSetup = ({ divisions, players, onComplete }) => {
+  const [divisionTeams, setDivisionTeams] = useState({
+    Rookies: [], Majors: [], Minors: [], Juniors: []
+  });
+  const [teamCounts, setTeamCounts] = useState({
+    Rookies: 4, Majors: 4, Minors: 4, Juniors: 4
+  });
 
-  const updateTeamCount = (division: string, count: string) => {
-    const n = Math.max(1, parseInt(count || '0')); // allow 1 team per your request
-    setTeamCounts(prev => ({ ...prev, [division]: n }));
-    setDivisionTeams(prev => ({ ...prev, [division]: Array(n).fill('').map((_, i) => prev[division][i] || '') }));
-  };
+  // NEW: count players currently assigned to each division (and not drafted)
+  const playerCounts = React.useMemo(() => {
+    const names = ['Rookies', 'Majors', 'Minors', 'Juniors'];
+    const byDiv = {};
+    names.forEach(name => {
+      byDiv[name] = (players || []).filter(
+        p => p.division === name && !p.drafted
+      ).length;
+    });
+    return byDiv;
+  }, [players]);
 
-  const updateTeamName = (division: string, idx: number, name: string) => {
-    setDivisionTeams(prev => {
-      const arr = [...(prev[division] || [])];
-      arr[idx] = name;
-      return { ...prev, [division]: arr };
+  const updateTeamCount = (division, count) => {
+    const numTeams = parseInt(count) || 0;
+    setTeamCounts({ ...teamCounts, [division]: numTeams });
+    setDivisionTeams({
+      ...divisionTeams,
+      [division]: Array(numTeams).fill('').map((_, i) => divisionTeams[division][i] || '')
     });
   };
 
-  const allTeamsNamed = () => Object.keys(divisionTeams).every(div => divisionTeams[div].length > 0 && divisionTeams[div].every(n => n.trim() !== ''));
+  const updateTeamName = (division, index, name) => {
+    const updated = [...divisionTeams[division]];
+    updated[index] = name;
+    setDivisionTeams({ ...divisionTeams, [division]: updated });
+  };
+
+  const allTeamsNamed = () =>
+    Object.keys(divisionTeams).every(div =>
+      divisionTeams[div].length > 0 && divisionTeams[div].every(name => name.trim() !== '')
+    );
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-lg shadow-lg p-8">
+          <div className="flex items-center gap-4 mb-6">
+            <img
+              src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png"
+              alt="BCLL"
+              className="w-16 h-16 object-contain"
+            />
+            <h2 className="text-2xl font-bold text-blue-900">
+              Set Up Teams for Each Division
+            </h2>
+          </div>
+
+          {['Rookies', 'Majors', 'Minors', 'Juniors'].map(divName => (
+            <div key={divName} className="mb-6 p-4 border border-gray-200 rounded-lg">
+              <h3 className="text-xl font-bold mb-3 text-blue-900 flex items-center gap-2">
+                {divName}
+                <span className="text-sm text-gray-600 font-normal">
+                  • {playerCounts[divName] ?? 0} players
+                </span>
+              </h3>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-2">Number of Teams:</label>
+                <input
+                  type="number"
+                  value={teamCounts[divName]}
+                  onChange={(e) => updateTeamCount(divName, e.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg w-32"
+                  min="2"
+                  max="20"
+                />
+                {/* Optional hint: players per team */}
+                <p className="text-xs text-gray-500 mt-1">
+                  ~{Math.ceil((playerCounts[divName] || 0) / (teamCounts[divName] || 1))} players per team (est.)
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {divisionTeams[divName].map((team, idx) => (
+                  <input
+                    key={idx}
+                    type="text"
+                    placeholder={`Team ${idx + 1} Name`}
+                    value={team}
+                    onChange={(e) => updateTeamName(divName, idx, e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg"
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <button
+            onClick={() => onComplete(divisionTeams)}
+            disabled={!allTeamsNamed()}
+            className={`w-full py-3 font-bold rounded-lg ${
+              allTeamsNamed()
+                ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400 cursor-pointer'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            {allTeamsNamed() ? 'Start Draft' : 'Please name all teams'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
