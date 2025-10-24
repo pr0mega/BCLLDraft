@@ -8,6 +8,7 @@ import React, { useState, useEffect } from 'react';
  * - Big Screen view can run in a 2nd window on the same computer
  * - Windows sync using localStorage (no server required)
  * - Export rosters (CSV)
+ * - NEW: Persistent draft log stored in localStorage + Export Draft Log (CSV)
  */
 
 const STORAGE_KEY = 'bcll-draft-state';
@@ -26,6 +27,25 @@ const LittleLeagueDraft = () => {
   const [filterAge, setFilterAge] = useState<'all' | string>('all');
   const [viewMode, setViewMode] = useState<'admin' | 'display'>('admin');
 
+  // Persistent, cross-division draft log (array of pick groups)
+  // Each entry: { ts, division, round, pick, team, players: [{id, evalId, firstName, lastName, age}] }
+  const [draftLog, setDraftLog] = useState<any[]>([]);
+
+  // --- initialize from localStorage (if present) ---
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.players) setPlayers(s.players);
+        if (s.divisions) setDivisions(s.divisions);
+        if (s.step) setStep(s.step);
+        if (s.draftState !== undefined) setDraftState(s.draftState);
+        if (Array.isArray(s.draftLog)) setDraftLog(s.draftLog);
+      }
+    } catch {}
+  }, []);
+
   // --- URL param: ?view=display forces display mode ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -38,11 +58,11 @@ const LittleLeagueDraft = () => {
     const isDisplay = params.get('view') === 'display';
     if (isDisplay) return; // display window is read-only mirror
 
-    const snapshot = { step, players, divisions, draftState, ts: Date.now() };
+    const snapshot = { step, players, divisions, draftState, draftLog, ts: Date.now() };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
     } catch {}
-  }, [step, players, divisions, draftState]);
+  }, [step, players, divisions, draftState, draftLog]);
 
   // --- Option A sync: listen for updates from the other window ---
   useEffect(() => {
@@ -54,25 +74,12 @@ const LittleLeagueDraft = () => {
         if (s.divisions) setDivisions(s.divisions);
         if (s.step) setStep(s.step);
         if (s.draftState !== undefined) setDraftState(s.draftState);
+        if (Array.isArray(s.draftLog)) setDraftLog(s.draftLog);
       } catch {}
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
-// On initial load, hydrate from localStorage so display window starts in sync
-useEffect(() => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const s = JSON.parse(raw);
-    if (s.players) setPlayers(s.players);
-    if (s.divisions) setDivisions(s.divisions);
-    if (s.step) setStep(s.step);
-    if (s.draftState !== undefined) setDraftState(s.draftState);
-  } catch {
-    // ignore bad JSON
-  }
-}, []);
 
   const calculateAge = (birthDate: string) => {
     if (!birthDate) return 0;
@@ -196,6 +203,7 @@ useEffect(() => {
     const group = siblingGroups.find(g => g.includes(player.id));
     const siblingNames: string[] = [];
     const siblingIds: string[] = [];
+    const pickedGroupPlayers: any[] = [player];
     if (group) {
       group.forEach(id => {
         if (id !== player.id) {
@@ -204,6 +212,7 @@ useEffect(() => {
             teams[teamIndex].roster.push(sib);
             siblingNames.push(sib['Evaluation ID']);
             siblingIds.push(sib.id);
+            pickedGroupPlayers.push(sib);
           }
         }
       });
@@ -226,6 +235,23 @@ useEffect(() => {
         siblingIds,
       },
     ];
+
+    // Append to persistent draftLog (grouped pick)
+    const logEntry = {
+      ts: new Date().toISOString(),
+      division: draftState.division,
+      round: draftState.currentRound,
+      pick: draftState.currentPick + 1,
+      team: draftState.teams[teamIndex].name,
+      players: pickedGroupPlayers.map(p => ({
+        id: p.id,
+        evalId: p['Evaluation ID'] || '',
+        firstName: p['Player First Name'] || '',
+        lastName: p['Player Last Name'] || '',
+        age: p.age || '',
+      })),
+    };
+    setDraftLog(prev => [...prev, logEntry]);
 
     setDraftState({
       ...draftState,
@@ -262,6 +288,9 @@ useEffect(() => {
     });
 
     setPlayers(prev => prev.map(p => (toRemove.includes(p.id) ? { ...p, drafted: false } : p)));
+
+    // Remove last group from persistent log as well
+    setDraftLog(prev => prev.slice(0, -1));
   };
 
   const exportRosters = () => {
@@ -278,6 +307,36 @@ useEffect(() => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${draftState.division}_rosters.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportDraftLog = () => {
+    // Flatten grouped log → one row per player drafted
+    const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name','Age'];
+    const rows: string[] = [header.join(',')];
+    draftLog.forEach((entry: any) => {
+      entry.players.forEach((pl: any) => {
+        rows.push([
+          entry.ts,
+          entry.division,
+          entry.round,
+          entry.pick,
+          entry.team,
+          `"${pl.evalId}"`,
+          `"${pl.firstName}"`,
+          `"${pl.lastName}"`,
+          pl.age,
+        ].join(','));
+      });
+    });
+    const blob = new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bcll_draft_log.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -410,21 +469,15 @@ useEffect(() => {
 
               <div className="flex gap-2 flex-wrap items-center">
                 {/* Open Big Screen in a new window with ?view=display */}
-            <button
-  onClick={() => {
-    // save a fresh snapshot so the display window hydrates immediately
-    try {
-      const snapshot = { step, players, divisions, draftState, ts: Date.now() };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-    } catch {}
-
-    const url = `${window.location.origin}${window.location.pathname}?view=display`;
-    window.open(url, 'bcll-display', 'noopener,noreferrer');
-  }}
-  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
->
-  📺 Open Big Screen
-</button>
+                <button
+                  onClick={() => {
+                    const url = `${window.location.origin}${window.location.pathname}?view=display`;
+                    window.open(url, 'bcll-display', 'noopener,noreferrer');
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
+                >
+                  📺 Open Big Screen
+                </button>
 
                 <button
                   onClick={undoLastPick}
@@ -442,6 +495,12 @@ useEffect(() => {
                   className="flex items-center gap-2 px-4 py-2 bg-blue-900 text-yellow-400 font-semibold rounded-lg hover:bg-blue-800"
                 >
                   💾 Export Rosters
+                </button>
+                <button
+                  onClick={exportDraftLog}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-700 text-yellow-200 font-semibold rounded-lg hover:bg-blue-600"
+                >
+                  📝 Export Draft Log
                 </button>
                 <button
                   onClick={() => setDraftState(null)}
@@ -604,10 +663,10 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
                     <div className={`text-lg font-semibold ${idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-200'}`}>{team.roster.length} players</div>
                   </div>
                   <div className={`${idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-100'} text-sm`}>
-                    {team.roster.slice(0, 5).map((p: any, i: number) => (
+                    {/* Show ALL picks (no "+ more...") */}
+                    {team.roster.map((p: any, i: number) => (
                       <div key={i}>ID: {p['Evaluation ID']} ({p.age}y)</div>
                     ))}
-                    {team.roster.length > 5 && <div className="italic">+ {team.roster.length - 5} more...</div>}
                   </div>
                 </div>
               ))}
