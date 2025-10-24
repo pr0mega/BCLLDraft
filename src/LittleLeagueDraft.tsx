@@ -1,20 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 /**
- * Little League Draft App (Option A: Two-Window Local Sync)
- * --------------------------------------------------------
- * - CSV upload → Assign divisions → Team setup → Live draft (Admin + Big Screen)
- * - TeamSetup shows Player Count per division
- * - Big Screen view can run in a 2nd window on the same computer
- * - Windows sync using localStorage (no server required)
- * - Export rosters (CSV)
- * - NEW: Persistent draft log stored in localStorage + Export Draft Log (CSV)
+ * Little League Draft App
+ * Option A: Two-window Local Sync via localStorage
+ * - Admin window controls the draft
+ * - Big Screen: open the same page with ?view=display (read-only mirror)
  */
+
+type Step = 'upload' | 'assign' | 'teams' | 'draft';
 
 const STORAGE_KEY = 'bcll-draft-state';
 
-const LittleLeagueDraft = () => {
-  const [step, setStep] = useState<'upload' | 'assign' | 'teams' | 'draft'>('upload');
+const LittleLeagueDraft: React.FC = () => {
+  const [step, setStep] = useState<Step>('upload');
   const [players, setPlayers] = useState<any[]>([]);
   const [divisions, setDivisions] = useState<any[]>([
     { name: 'Rookies', order: 1, teams: [] as string[] },
@@ -23,64 +21,14 @@ const LittleLeagueDraft = () => {
     { name: 'Juniors', order: 4, teams: [] as string[] },
   ]);
   const [draftState, setDraftState] = useState<any | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterAge, setFilterAge] = useState<'all' | string>('all');
+  const [draftLog, setDraftLog] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<'admin' | 'display'>('admin');
 
-  // Persistent, cross-division draft log (array of pick groups)
-  // Each entry: { ts, division, round, pick, team, players: [{id, evalId, firstName, lastName, age}] }
-  const [draftLog, setDraftLog] = useState<any[]>([]);
+  // Admin view filters/search
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterAge, setFilterAge] = useState<'all' | string>('all');
 
-  // --- initialize from localStorage (if present) ---
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const s = JSON.parse(raw);
-        if (s.players) setPlayers(s.players);
-        if (s.divisions) setDivisions(s.divisions);
-        if (s.step) setStep(s.step);
-        if (s.draftState !== undefined) setDraftState(s.draftState);
-        if (Array.isArray(s.draftLog)) setDraftLog(s.draftLog);
-      }
-    } catch {}
-  }, []);
-
-  // --- URL param: ?view=display forces display mode ---
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('view') === 'display') setViewMode('display');
-  }, []);
-
-  // --- Option A sync: save state to localStorage (admin window only) ---
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const isDisplay = params.get('view') === 'display';
-    if (isDisplay) return; // display window is read-only mirror
-
-    const snapshot = { step, players, divisions, draftState, draftLog, ts: Date.now() };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-    } catch {}
-  }, [step, players, divisions, draftState, draftLog]);
-
-  // --- Option A sync: listen for updates from the other window ---
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY || !e.newValue) return;
-      try {
-        const s = JSON.parse(e.newValue);
-        if (s.players) setPlayers(s.players);
-        if (s.divisions) setDivisions(s.divisions);
-        if (s.step) setStep(s.step);
-        if (s.draftState !== undefined) setDraftState(s.draftState);
-        if (Array.isArray(s.draftLog)) setDraftLog(s.draftLog);
-      } catch {}
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
+  // ---------- Helpers ----------
   const calculateAge = (birthDate: string) => {
     if (!birthDate) return 0;
     const birth = new Date(birthDate);
@@ -92,6 +40,26 @@ const LittleLeagueDraft = () => {
     return age;
   };
 
+  const parseCSVLine = (line: string) => {
+    const out: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === ',' && !inQuotes) {
+        out.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur.trim());
+    return out;
+  };
+
+  // ---------- Upload CSV ----------
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -99,26 +67,6 @@ const LittleLeagueDraft = () => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = String(e.target?.result || '');
-
-      const parseCSVLine = (line: string) => {
-        const result: string[] = [];
-        let cur = '';
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          if (ch === '"') {
-            inQuotes = !inQuotes;
-          } else if (ch === ',' && !inQuotes) {
-            result.push(cur.trim());
-            cur = '';
-          } else {
-            cur += ch;
-          }
-        }
-        result.push(cur.trim());
-        return result;
-      };
-
       const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
       if (lines.length === 0) return;
       const headers = parseCSVLine(lines[0]);
@@ -133,7 +81,7 @@ const LittleLeagueDraft = () => {
         if (p.age < 8) p.division = 'Rookies';
         else if (p.age === 12) p.division = 'Majors';
         else if (p.age >= 13) p.division = 'Juniors';
-        else p.division = '';
+        else p.division = ''; // needs manual assignment
         return p;
       });
 
@@ -143,6 +91,7 @@ const LittleLeagueDraft = () => {
     reader.readAsText(file);
   };
 
+  // ---------- Siblings ----------
   const findSiblings = (list: any[]) => {
     const groups: Record<string, string[]> = {};
     list.forEach(p => {
@@ -153,6 +102,7 @@ const LittleLeagueDraft = () => {
     return Object.values(groups).filter(g => g.length > 1);
   };
 
+  // ---------- Teams / Divisions ----------
   const finishAssignment = (divisionTeams: Record<string, string[]>) => {
     const updated = divisions.map(d => ({ ...d, teams: divisionTeams[d.name] || [] }));
     setDivisions(updated);
@@ -188,6 +138,7 @@ const LittleLeagueDraft = () => {
     return order;
   };
 
+  // ---------- Draft actions ----------
   const draftPlayer = (player: any) => {
     if (!draftState) return;
     const teamIndex = draftState.draftOrder[draftState.currentPick];
@@ -343,6 +294,99 @@ const LittleLeagueDraft = () => {
     URL.revokeObjectURL(url);
   };
 
+  // ---------- Big Screen sync (two-window) ----------
+  // Load from storage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.players) setPlayers(s.players);
+        if (s.divisions) setDivisions(s.divisions);
+        if (s.step) setStep(s.step);
+        if (s.draftState) setDraftState(s.draftState);
+        if (s.draftLog) setDraftLog(s.draftLog);
+      }
+    } catch {}
+  }, []);
+
+  // Save to storage when admin changes state
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isDisplay = params.get('view') === 'display';
+    if (isDisplay) {
+      setViewMode('display');
+      return;
+    }
+    const snapshot = { step, players, divisions, draftState, draftLog, ts: Date.now() };
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
+  }, [step, players, divisions, draftState, draftLog]);
+
+  // Listen for storage events (mirror updates)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== STORAGE_KEY || !e.newValue) return;
+      try {
+        const s = JSON.parse(e.newValue);
+        if (s.players) setPlayers(s.players);
+        if (s.divisions) setDivisions(s.divisions);
+        if (s.step) setStep(s.step);
+        if (s.draftState) setDraftState(s.draftState);
+        if (s.draftLog) setDraftLog(s.draftLog);
+      } catch {}
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // ---------- Restart actions ----------
+  const restartCurrentDivision = () => {
+    if (!draftState) return;
+    const divName: string = draftState.division;
+    if (!window.confirm(`Restart the ${divName} draft? This clears all picks and the draft log for this division.`)) return;
+
+    // Reset drafted flags for players in this division and rebuild draft state
+    setPlayers(prev => {
+      const resetPlayers = prev.map(p => (p.division === divName ? { ...p, drafted: false } : p));
+      const divisionObj = divisions.find(d => d.name === divName);
+      const teams = (divisionObj?.teams || []).map((name: string) => ({ name, roster: [] as any[] }));
+      const divisionPlayers = resetPlayers.filter(p => p.division === divName);
+      const draftOrder = generateDraftOrder(teams.length, divisionPlayers.length);
+
+      setDraftState({
+        division: divName,
+        teams,
+        availablePlayers: divisionPlayers,
+        currentRound: 1,
+        currentPick: 0,
+        draftOrder,
+        pickHistory: [],
+      });
+
+      return resetPlayers;
+    });
+
+    // Remove this division's entries from the persistent draft log
+    setDraftLog(prev => prev.filter((e: any) => e.division !== divName));
+  };
+
+  const resetApp = () => {
+    if (!window.confirm('Restart entire draft? This will erase ALL data and return to the upload screen.')) return;
+    localStorage.removeItem(STORAGE_KEY);
+    setPlayers([]);
+    setDivisions([
+      { name: 'Rookies', order: 1, teams: [] },
+      { name: 'Majors', order: 2, teams: [] },
+      { name: 'Minors', order: 3, teams: [] },
+      { name: 'Juniors', order: 4, teams: [] },
+    ]);
+    setDraftState(null);
+    setDraftLog([]);
+    setStep('upload');
+    setViewMode('admin');
+  };
+
+  // ---------- View Helpers ----------
   const getOldestAvailableAge = () => {
     if (!draftState || draftState.availablePlayers.length === 0) return null;
     return Math.max(...draftState.availablePlayers.map((p: any) => p.age));
@@ -362,7 +406,7 @@ const LittleLeagueDraft = () => {
     ? [...new Set(draftState.availablePlayers.map((p: any) => p.age))].sort((a: number, b: number) => b - a)
     : [];
 
-  // --- RENDER ROUTES ---
+  // ---------- Renders ----------
   if (step === 'upload') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
@@ -375,8 +419,8 @@ const LittleLeagueDraft = () => {
                 className="w-40 h-40 mx-auto mb-4 object-contain"
                 onError={(e: any) => {
                   e.currentTarget.style.display = 'none';
-                  const fallback = document.getElementById('bcll-fallback');
-                  if (fallback) (fallback as HTMLElement).style.display = 'block';
+                  const fb = document.getElementById('bcll-fallback');
+                  if (fb) (fb as HTMLElement).style.display = 'block';
                 }}
               />
               <div id="bcll-fallback" className="fallback-icon text-6xl mb-4 hidden">⚾</div>
@@ -393,7 +437,7 @@ const LittleLeagueDraft = () => {
               <p className="text-sm text-gray-500 mt-2">CSV file with player registration data</p>
             </div>
 
-            {/* Draft practice file link (relative path works on both domains) */}
+            {/* Draft practice file link */}
             <div className="text-center mt-4">
               <a
                 href="/sample_players_bcll.csv"
@@ -412,14 +456,16 @@ const LittleLeagueDraft = () => {
                 <div className="text-sm text-gray-700">
                   <p className="font-medium mb-1">Required CSV columns:</p>
                   <p className="text-xs">
-                    Evaluation ID, Account First Name, Account Last Name, Player First Name, Player Last Name, Player Gender, Player Birth Date, Street Address, City, State, Postal Code, User Email, Cellphone, Jersey Size, Player Allergies
+                    Evaluation ID, Account First Name, Account Last Name, Player First Name, Player Last Name,
+                    Player Gender, Player Birth Date, Street Address, City, State, Postal Code, User Email,
+                    Cellphone, Jersey Size, Player Allergies
                   </p>
                   <p className="text-xs mt-2 font-medium">Auto-assignment rules:</p>
                   <p className="text-xs">• Under 8 → Rookies</p>
                   <p className="text-xs">• Age 8 → Manual (Rookies or Minors)</p>
                   <p className="text-xs">• 9–11 → Manual (Minors or Majors)</p>
                   <p className="text-xs">• Age 12 → Majors</p>
-                  <p className="text-xs">• 13+ → Juniors/Intermediate</p>
+                  <p className="text-xs">• 13+ → Juniors</p>
                 </div>
               </div>
             </div>
@@ -468,6 +514,13 @@ const LittleLeagueDraft = () => {
               </div>
 
               <div className="flex gap-2 flex-wrap items-center">
+                {/* Restart current division draft */}
+                <button
+                  onClick={restartCurrentDivision}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-700 text-white font-semibold rounded-lg hover:bg-red-800"
+                >
+                  ⟲ Restart Draft
+                </button>
                 {/* Open Big Screen in a new window with ?view=display */}
                 <button
                   onClick={() => {
@@ -507,6 +560,12 @@ const LittleLeagueDraft = () => {
                   className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
                 >
                   Back to Divisions
+                </button>
+                <button
+                  onClick={resetApp}
+                  className="px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
+                >
+                  🔄 Restart Entire App
                 </button>
               </div>
             </div>
@@ -600,7 +659,8 @@ const LittleLeagueDraft = () => {
   return null;
 };
 
-const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => void }) => {
+// ---------- Big Screen ----------
+const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draftState, onBack }) => {
   const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
   const currentTeam = draftState.teams[currentTeamIndex];
   const recentPicks = draftState.pickHistory.slice(-8).reverse();
@@ -608,7 +668,10 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-blue-950 p-8">
       <div className="max-w-7xl mx-auto">
-        <button onClick={onBack} className="mb-4 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400">
+        <button
+          onClick={onBack}
+          className="mb-4 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
+        >
           ← Back to Admin View
         </button>
 
@@ -620,12 +683,18 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
               className="w-24 h-24 object-contain"
             />
           </div>
-          <h1 className="text-5xl font-bold text-yellow-400 text-center mb-4">{draftState.division} DRAFT</h1>
-          <div className="text-center text-yellow-200 text-2xl mb-6">Round {draftState.currentRound} • Pick {draftState.currentPick + 1}</div>
+          <h1 className="text-5xl font-bold text-yellow-400 text-center mb-4">
+            {draftState.division} DRAFT
+          </h1>
+          <div className="text-center text-yellow-200 text-2xl mb-6">
+            Round {draftState.currentRound} • Pick {draftState.currentPick + 1}
+          </div>
 
           <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
             <div className="text-xl font-semibold text-blue-950 mb-2">NOW DRAFTING</div>
-            <div className="text-6xl font-bold text-blue-950">{currentTeam?.name || '—'}</div>
+            <div className="text-6xl font-bold text-blue-950">
+              {currentTeam?.name || '—'}
+            </div>
           </div>
         </div>
 
@@ -637,15 +706,23 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
                 <div key={idx} className="bg-blue-950/60 rounded-lg p-4 border border-yellow-500/30">
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="text-yellow-200 text-sm">Round {pick.round} • Pick {pick.pick}</div>
-                      <div className="text-2xl font-bold text-yellow-400 mt-1">ID: {pick.player}</div>
+                      <div className="text-yellow-200 text-sm">
+                        Round {pick.round} • Pick {pick.pick}
+                      </div>
+                      <div className="text-2xl font-bold text-yellow-400 mt-1">
+                        ID: {pick.player}
+                      </div>
                       <div className="text-yellow-100 text-sm">Age {pick.age}</div>
                       {pick.siblings && pick.siblings.length > 0 && (
-                        <div className="text-yellow-300 text-xs mt-1">+ Siblings: {pick.siblings.join(', ')}</div>
+                        <div className="text-yellow-300 text-xs mt-1">
+                          + Siblings: {pick.siblings.join(', ')}
+                        </div>
                       )}
                     </div>
                     <div className="text-right">
-                      <div className="text-xl font-bold text-yellow-400">{pick.team}</div>
+                      <div className="text-xl font-bold text-yellow-400">
+                        {pick.team}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -657,13 +734,36 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
             <h2 className="text-3xl font-bold text-yellow-400 mb-6">Team Rosters</h2>
             <div className="space-y-4 max-h-96 overflow-y-auto">
               {draftState.teams.map((team: any, idx: number) => (
-                <div key={idx} className={`rounded-lg p-4 border-2 ${idx === currentTeamIndex ? 'bg-gradient-to-r from-yellow-500 to-yellow-400 border-yellow-300' : 'bg-blue-950/60 border-yellow-500/30'}`}>
+                <div
+                  key={idx}
+                  className={`rounded-lg p-4 border-2 ${
+                    idx === currentTeamIndex
+                      ? 'bg-gradient-to-r from-yellow-500 to-yellow-400 border-yellow-300'
+                      : 'bg-blue-950/60 border-yellow-500/30'
+                  }`}
+                >
                   <div className="flex justify-between items-center mb-2">
-                    <div className={`text-xl font-bold ${idx === currentTeamIndex ? 'text-blue-950' : 'text-yellow-400'}`}>{team.name}</div>
-                    <div className={`text-lg font-semibold ${idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-200'}`}>{team.roster.length} players</div>
+                    <div
+                      className={`text-xl font-bold ${
+                        idx === currentTeamIndex ? 'text-blue-950' : 'text-yellow-400'
+                      }`}
+                    >
+                      {team.name}
+                    </div>
+                    <div
+                      className={`text-lg font-semibold ${
+                        idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-200'
+                      }`}
+                    >
+                      {team.roster.length} players
+                    </div>
                   </div>
-                  <div className={`${idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-100'} text-sm`}>
-                    {/* Show ALL picks (no "+ more...") */}
+                  <div
+                    className={`${
+                      idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-100'
+                    } text-sm`}
+                  >
+                    {/* Show ALL picks */}
                     {team.roster.map((p: any, i: number) => (
                       <div key={i}>ID: {p['Evaluation ID']} ({p.age}y)</div>
                     ))}
@@ -678,9 +778,16 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
   );
 };
 
-const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[]; setPlayers: any; onComplete: () => void }) => {
+// ---------- Player Assignment ----------
+const PlayerAssignment: React.FC<{
+  players: any[];
+  setPlayers: React.Dispatch<any>;
+  onComplete: () => void;
+}> = ({ players, setPlayers, onComplete }) => {
   const assignPlayerToDivision = (id: string, divisionName: string) => {
-    setPlayers((prev: any[]) => prev.map(p => (p.id === id ? { ...p, division: divisionName } : p)));
+    setPlayers((prev: any[]) =>
+      prev.map(p => (p.id === id ? { ...p, division: divisionName } : p))
+    );
   };
 
   const needsAssignment = players.filter(p => !p.division);
@@ -691,13 +798,19 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex items-center gap-4 mb-6">
-            <img src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png" alt="BCLL" className="w-16 h-16 object-contain" />
+            <img
+              src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png"
+              alt="BCLL"
+              className="w-16 h-16 object-contain"
+            />
             <h2 className="text-2xl font-bold text-blue-900">Assign Players to Divisions</h2>
           </div>
 
           {autoAssigned.length > 0 && (
             <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <p className="text-sm font-medium text-green-800">✓ {autoAssigned.length} players auto-assigned (Under 8 → Rookies, Age 12 → Majors, 13+ → Juniors)</p>
+              <p className="text-sm font-medium text-green-800">
+                ✓ {autoAssigned.length} players auto-assigned (Under 8 → Rookies, Age 12 → Majors, 13+ → Juniors)
+              </p>
             </div>
           )}
 
@@ -715,7 +828,9 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
                 <p className="text-xs font-mono">
                   DEBUG: Players needing assignment:
                   <br />
-                  {needsAssignment.map(p => `ID:${p['Evaluation ID']} ${p['Player First Name']} ${p['Player Last Name']}: Age=${p.age}, Division="${p.division}"`).join('\n')}
+                  {needsAssignment
+                    .map(p => `ID:${p['Evaluation ID']} ${p['Player First Name']} ${p['Player Last Name']}: Age=${p.age}, Division="${p.division}"`)
+                    .join('\n')}
                 </p>
               </div>
 
@@ -738,7 +853,7 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
                         <td className="p-2">
                           <select
                             value={p.division || ''}
-                            onChange={e => assignPlayerToDivision(p.id, e.target.value)}
+                            onChange={(e) => assignPlayerToDivision(p.id, e.target.value)}
                             className="px-2 py-1 border border-gray-300 rounded"
                           >
                             <option value="">Select Division</option>
@@ -770,7 +885,11 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
           <button
             onClick={onComplete}
             disabled={needsAssignment.length > 0}
-            className={`mt-6 w-full py-3 font-bold rounded-lg ${needsAssignment.length === 0 ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+            className={`mt-6 w-full py-3 font-bold rounded-lg ${
+              needsAssignment.length === 0
+                ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400 cursor-pointer'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
           >
             {needsAssignment.length === 0 ? 'Next: Set Up Teams' : `Assign ${needsAssignment.length} more players`}
           </button>
@@ -780,8 +899,12 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
   );
 };
 
-// ---------- TeamSetup (with player counts) ----------
-const TeamSetup = ({ divisions, players, onComplete }: { divisions: any[]; players: any[]; onComplete: (dt: Record<string, string[]>) => void }) => {
+// ---------- Team Setup (with player counts) ----------
+const TeamSetup: React.FC<{
+  divisions: any[];
+  players: any[];
+  onComplete: (dt: Record<string, string[]>) => void;
+}> = ({ divisions, players, onComplete }) => {
   const [divisionTeams, setDivisionTeams] = useState<Record<string, string[]>>({
     Rookies: [], Majors: [], Minors: [], Juniors: []
   });
@@ -789,7 +912,7 @@ const TeamSetup = ({ divisions, players, onComplete }: { divisions: any[]; playe
     Rookies: 4, Majors: 4, Minors: 4, Juniors: 4
   });
 
-  const playerCounts = React.useMemo(() => {
+  const playerCounts = useMemo(() => {
     const names = ['Rookies', 'Majors', 'Minors', 'Juniors'];
     const byDiv: Record<string, number> = {};
     names.forEach(name => {
@@ -891,14 +1014,23 @@ const TeamSetup = ({ divisions, players, onComplete }: { divisions: any[]; playe
   );
 };
 
-const DivisionSelector = ({ divisions, players, onSelectDivision }: { divisions: any[]; players: any[]; onSelectDivision: (d: any) => void }) => {
+// ---------- Division Selector ----------
+const DivisionSelector: React.FC<{
+  divisions: any[];
+  players: any[];
+  onSelectDivision: (d: any) => void;
+}> = ({ divisions, players, onSelectDivision }) => {
   const sorted = [...divisions].sort((a, b) => a.order - b.order);
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex items-center gap-4 mb-4">
-            <img src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png" alt="BCLL" className="w-16 h-16 object-contain" />
+            <img
+              src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png"
+              alt="BCLL"
+              className="w-16 h-16 object-contain"
+            />
             <div>
               <h2 className="text-2xl font-bold text-blue-900">Select Division to Draft</h2>
               <p className="text-gray-600">Draft Order: Rookies → Majors → Minors → Juniors</p>
@@ -917,9 +1049,13 @@ const DivisionSelector = ({ divisions, players, onSelectDivision }: { divisions:
                   <div className="flex justify-between items-center">
                     <div>
                       <h3 className="text-xl font-bold mb-2 text-blue-900">{div.name}</h3>
-                      <p className="text-gray-600">{div.teams?.length || 0} teams • {divPlayers.length} players available</p>
+                      <p className="text-gray-600">
+                        {div.teams?.length || 0} teams • {divPlayers.length} players available
+                      </p>
                       {div.teams && div.teams.length > 0 && (
-                        <div className="mt-2 text-sm text-gray-500">Teams: {div.teams.join(', ')}</div>
+                        <div className="mt-2 text-sm text-gray-500">
+                          Teams: {div.teams.join(', ')}
+                        </div>
                       )}
                     </div>
                     <div className="text-4xl font-bold text-blue-900 opacity-20">{div.order}</div>
@@ -928,6 +1064,7 @@ const DivisionSelector = ({ divisions, players, onSelectDivision }: { divisions:
               );
             })}
           </div>
+
         </div>
       </div>
     </div>
