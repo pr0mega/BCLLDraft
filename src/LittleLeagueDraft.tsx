@@ -1,11 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 /**
- * Little League Draft App
+ * Little League Draft App (Option A: Two-Window Local Sync)
+ * --------------------------------------------------------
  * - CSV upload → Assign divisions → Team setup → Live draft (Admin + Big Screen)
  * - TeamSetup shows Player Count per division
- * - Export rosters fixed
+ * - Big Screen view can run in a 2nd window on the same computer
+ * - Windows sync using localStorage (no server required)
+ * - Export rosters (CSV)
  */
+
+const STORAGE_KEY = 'bcll-draft-state';
 
 const LittleLeagueDraft = () => {
   const [step, setStep] = useState<'upload' | 'assign' | 'teams' | 'draft'>('upload');
@@ -20,6 +25,40 @@ const LittleLeagueDraft = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAge, setFilterAge] = useState<'all' | string>('all');
   const [viewMode, setViewMode] = useState<'admin' | 'display'>('admin');
+
+  // --- URL param: ?view=display forces display mode ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'display') setViewMode('display');
+  }, []);
+
+  // --- Option A sync: save state to localStorage (admin window only) ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isDisplay = params.get('view') === 'display';
+    if (isDisplay) return; // display window is read-only mirror
+
+    const snapshot = { step, players, divisions, draftState, ts: Date.now() };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {}
+  }, [step, players, divisions, draftState]);
+
+  // --- Option A sync: listen for updates from the other window ---
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== STORAGE_KEY || !e.newValue) return;
+      try {
+        const s = JSON.parse(e.newValue);
+        if (s.players) setPlayers(s.players);
+        if (s.divisions) setDivisions(s.divisions);
+        if (s.step) setStep(s.step);
+        if (s.draftState !== undefined) setDraftState(s.draftState);
+      } catch {}
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const calculateAge = (birthDate: string) => {
     if (!birthDate) return 0;
@@ -264,7 +303,7 @@ const LittleLeagueDraft = () => {
                 onError={(e: any) => {
                   e.currentTarget.style.display = 'none';
                   const fallback = document.getElementById('bcll-fallback');
-                  if (fallback) fallback.style.display = 'block';
+                  if (fallback) (fallback as HTMLElement).style.display = 'block';
                 }}
               />
               <div id="bcll-fallback" className="fallback-icon text-6xl mb-4 hidden">⚾</div>
@@ -281,7 +320,7 @@ const LittleLeagueDraft = () => {
               <p className="text-sm text-gray-500 mt-2">CSV file with player registration data</p>
             </div>
 
-            {/* Draft practice file link (use relative path so it works on both domains) */}
+            {/* Draft practice file link (relative path works on both domains) */}
             <div className="text-center mt-4">
               <a
                 href="/sample_players_bcll.csv"
@@ -354,7 +393,19 @@ const LittleLeagueDraft = () => {
                   <p className="text-gray-600">Round {draftState.currentRound} • Pick {draftState.currentPick + 1}</p>
                 </div>
               </div>
-              <div className="flex gap-2 flex-wrap">
+
+              <div className="flex gap-2 flex-wrap items-center">
+                {/* Open Big Screen in a new window with ?view=display */}
+                <button
+                  onClick={() => {
+                    const url = `${window.location.origin}${window.location.pathname}?view=display`;
+                    window.open(url, 'bcll-display', 'noopener,noreferrer');
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
+                >
+                  📺 Open Big Screen
+                </button>
+
                 <button
                   onClick={undoLastPick}
                   disabled={draftState.pickHistory.length === 0}
@@ -365,12 +416,6 @@ const LittleLeagueDraft = () => {
                   }`}
                 >
                   ↶ Undo Last Pick
-                </button>
-                <button
-                  onClick={() => setViewMode('display')}
-                  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
-                >
-                  📺 Big Screen View
                 </button>
                 <button
                   onClick={exportRosters}
