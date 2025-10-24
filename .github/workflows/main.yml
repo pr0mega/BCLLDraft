@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # IMPORTANT: removed cache because there's no lockfile in the repo
       - run: npm install
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
