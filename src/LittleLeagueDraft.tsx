@@ -59,6 +59,20 @@ const LittleLeagueDraft = () => {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+// On initial load, hydrate from localStorage so display window starts in sync
+useEffect(() => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s.players) setPlayers(s.players);
+    if (s.divisions) setDivisions(s.divisions);
+    if (s.step) setStep(s.step);
+    if (s.draftState !== undefined) setDraftState(s.draftState);
+  } catch {
+    // ignore bad JSON
+  }
+}, []);
 
   const calculateAge = (birthDate: string) => {
     if (!birthDate) return 0;
@@ -396,15 +410,21 @@ const LittleLeagueDraft = () => {
 
               <div className="flex gap-2 flex-wrap items-center">
                 {/* Open Big Screen in a new window with ?view=display */}
-                <button
-                  onClick={() => {
-                    const url = `${window.location.origin}${window.location.pathname}?view=display`;
-                    window.open(url, 'bcll-display', 'noopener,noreferrer');
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
-                >
-                  📺 Open Big Screen
-                </button>
+            <button
+  onClick={() => {
+    // save a fresh snapshot so the display window hydrates immediately
+    try {
+      const snapshot = { step, players, divisions, draftState, ts: Date.now() };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {}
+
+    const url = `${window.location.origin}${window.location.pathname}?view=display`;
+    window.open(url, 'bcll-display', 'noopener,noreferrer');
+  }}
+  className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
+>
+  📺 Open Big Screen
+</button>
 
                 <button
                   onClick={undoLastPick}
