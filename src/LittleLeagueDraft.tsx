@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 
-// Little League Draft App
-// - CSV upload → Assign divisions → Team setup → Live draft (Admin + Big Screen)
-// - Fixes from your notes: allows 1 team per division, CSV age auto-assign includes Juniors (13+)
-// - Export rosters works (CSV file per division)
+/**
+ * Little League Draft App
+ * - CSV upload → Assign divisions → Team setup → Live draft (Admin + Big Screen)
+ * - TeamSetup shows Player Count per division
+ * - Export rosters fixed
+ */
 
 const LittleLeagueDraft = () => {
   const [step, setStep] = useState<'upload' | 'assign' | 'teams' | 'draft'>('upload');
@@ -98,6 +100,10 @@ const LittleLeagueDraft = () => {
   };
 
   const startDivisionDraft = (division: any) => {
+    if (!division.teams || division.teams.length === 0) {
+      alert(`Please add at least one team for ${division.name} before drafting.`);
+      return;
+    }
     const divisionPlayers = players.filter(p => !p.drafted && p.division === division.name);
     const teams = division.teams.map((name: string) => ({ name, roster: [] as any[] }));
     setDraftState({
@@ -125,7 +131,7 @@ const LittleLeagueDraft = () => {
   const draftPlayer = (player: any) => {
     if (!draftState) return;
     const teamIndex = draftState.draftOrder[draftState.currentPick];
-    if (teamIndex == null) return; // no slot (end of draft)
+    if (teamIndex == null) return; // end of draft
 
     const teams = [...draftState.teams];
     teams[teamIndex].roster.push(player);
@@ -207,11 +213,11 @@ const LittleLeagueDraft = () => {
 
   const exportRosters = () => {
     if (!draftState) return;
-    let csv = 'Team,Evaluation ID,Player First Name,Player Last Name,Birth Date,Age,Gender,Jersey Size,Allergies,Parent Email,Cellphone,Address\\n';
+    let csv = 'Team,Evaluation ID,Player First Name,Player Last Name,Birth Date,Age,Gender,Jersey Size,Allergies,Parent Email,Cellphone,Address\n';
     draftState.teams.forEach((team: any) => {
       team.roster.forEach((p: any) => {
         const addr = `${p['Street Address'] || ''}, ${p['City'] || ''}, ${p['State'] || ''} ${p['Postal Code'] || ''}`.trim();
-        csv += `${team.name},\"${p['Evaluation ID'] || ''}\",\"${p['Player First Name'] || ''}\",\"${p['Player Last Name'] || ''}\",\"${p['Player Birth Date'] || ''}\",${p.age || ''},\"${p['Player Gender'] || ''}\",\"${p['Jersey Size'] || ''}\",\"${p['Player Allergies'] || ''}\",\"${p['User Email'] || ''}\",\"${p['Cellphone'] || ''}\",\"${addr}\"\\n`;
+        csv += `${team.name},"${p['Evaluation ID'] || ''}","${p['Player First Name'] || ''}","${p['Player Last Name'] || ''}","${p['Player Birth Date'] || ''}",${p.age || ''},"${p['Player Gender'] || ''}","${p['Jersey Size'] || ''}","${p['Player Allergies'] || ''}","${p['User Email'] || ''}","${p['Cellphone'] || ''}","${addr}"\n`;
       });
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -274,17 +280,20 @@ const LittleLeagueDraft = () => {
               </label>
               <p className="text-sm text-gray-500 mt-2">CSV file with player registration data</p>
             </div>
-<div className="text-center mt-4">
-  <a
-    href="https://bcdraft.coachteep.com/sample_players_bcll.csv"
-    target="_blank"
-    rel="noopener noreferrer"
-    className="text-blue-900 font-semibold underline hover:text-blue-700"
-  >
-    📄 Download Draft Practice File
-  </a>
-  <p className="text-sm text-gray-500">Use this sample CSV to test the draft system</p>
-</div>
+
+            {/* Draft practice file link (use relative path so it works on both domains) */}
+            <div className="text-center mt-4">
+              <a
+                href="/sample_players_bcll.csv"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-900 font-semibold underline hover:text-blue-700"
+              >
+                📄 Download Draft Practice File
+              </a>
+              <p className="text-sm text-gray-500">Use this sample CSV to test the draft system</p>
+            </div>
+
             <div className="mt-6 p-4 bg-blue-50 rounded-lg">
               <div className="flex items-start">
                 <span className="text-blue-900 mr-2 text-xl">ℹ️</span>
@@ -313,8 +322,8 @@ const LittleLeagueDraft = () => {
   }
 
   if (step === 'teams') {
-  return <TeamSetup divisions={divisions} players={players} onComplete={finishAssignment} />;
-}
+    return <TeamSetup divisions={divisions} players={players} onComplete={finishAssignment} />;
+  }
 
   if (step === 'draft') {
     if (!draftState) {
@@ -504,7 +513,7 @@ const DisplayBoard = ({ draftState, onBack }: { draftState: any; onBack: () => v
                 <div key={idx} className="bg-blue-950/60 rounded-lg p-4 border border-yellow-500/30">
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="text-yellow-2 00 text-sm">Round {pick.round} • Pick {pick.pick}</div>
+                      <div className="text-yellow-200 text-sm">Round {pick.round} • Pick {pick.pick}</div>
                       <div className="text-2xl font-bold text-yellow-400 mt-1">ID: {pick.player}</div>
                       <div className="text-yellow-100 text-sm">Age {pick.age}</div>
                       {pick.siblings && pick.siblings.length > 0 && (
@@ -647,40 +656,39 @@ const PlayerAssignment = ({ players, setPlayers, onComplete }: { players: any[];
   );
 };
 
-// before: const TeamSetup = ({ divisions, onComplete }) => {
-const TeamSetup = ({ divisions, players, onComplete }) => {
-  const [divisionTeams, setDivisionTeams] = useState({
+// ---------- TeamSetup (with player counts) ----------
+const TeamSetup = ({ divisions, players, onComplete }: { divisions: any[]; players: any[]; onComplete: (dt: Record<string, string[]>) => void }) => {
+  const [divisionTeams, setDivisionTeams] = useState<Record<string, string[]>>({
     Rookies: [], Majors: [], Minors: [], Juniors: []
   });
-  const [teamCounts, setTeamCounts] = useState({
+  const [teamCounts, setTeamCounts] = useState<Record<string, number>>({
     Rookies: 4, Majors: 4, Minors: 4, Juniors: 4
   });
 
-  // NEW: count players currently assigned to each division (and not drafted)
   const playerCounts = React.useMemo(() => {
     const names = ['Rookies', 'Majors', 'Minors', 'Juniors'];
-    const byDiv = {};
+    const byDiv: Record<string, number> = {};
     names.forEach(name => {
-      byDiv[name] = (players || []).filter(
-        p => p.division === name && !p.drafted
-      ).length;
+      byDiv[name] = (players || []).filter(p => p.division === name && !p.drafted).length;
     });
     return byDiv;
   }, [players]);
 
-  const updateTeamCount = (division, count) => {
+  const updateTeamCount = (division: string, count: string) => {
     const numTeams = parseInt(count) || 0;
-    setTeamCounts({ ...teamCounts, [division]: numTeams });
-    setDivisionTeams({
-      ...divisionTeams,
-      [division]: Array(numTeams).fill('').map((_, i) => divisionTeams[division][i] || '')
-    });
+    setTeamCounts(prev => ({ ...prev, [division]: numTeams }));
+    setDivisionTeams(prev => ({
+      ...prev,
+      [division]: Array(numTeams).fill('').map((_, i) => prev[division][i] || '')
+    }));
   };
 
-  const updateTeamName = (division, index, name) => {
-    const updated = [...divisionTeams[division]];
-    updated[index] = name;
-    setDivisionTeams({ ...divisionTeams, [division]: updated });
+  const updateTeamName = (division: string, index: number, name: string) => {
+    setDivisionTeams(prev => {
+      const updated = [...prev[division]];
+      updated[index] = name;
+      return { ...prev, [division]: updated };
+    });
   };
 
   const allTeamsNamed = () =>
@@ -719,19 +727,18 @@ const TeamSetup = ({ divisions, players, onComplete }) => {
                   value={teamCounts[divName]}
                   onChange={(e) => updateTeamCount(divName, e.target.value)}
                   className="px-4 py-2 border border-gray-300 rounded-lg w-32"
-                  min="2"
-                  max="20"
+                  min={1}
+                  max={20}
                 />
-                {/* Optional hint: players per team */}
                 <p className="text-xs text-gray-500 mt-1">
                   ~{Math.ceil((playerCounts[divName] || 0) / (teamCounts[divName] || 1))} players per team (est.)
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {divisionTeams[divName].map((team, idx) => (
+              <div className="grid grid-cols-1 md-grid-cols-2 gap-2">
+                {(divisionTeams[divName] || []).map((team, idx) => (
                   <input
-                    key={idx}
+                    key={`${divName}-${idx}`}
                     type="text"
                     placeholder={`Team ${idx + 1} Name`}
                     value={team}
@@ -751,60 +758,6 @@ const TeamSetup = ({ divisions, players, onComplete }) => {
                 ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400 cursor-pointer'
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
-          >
-            {allTeamsNamed() ? 'Start Draft' : 'Please name all teams'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-lg p-8">
-          <div className="flex items-center gap-4 mb-6">
-            <img src="https://dt5602vnjxv0c.cloudfront.net/portals/21306/logo638733237610557201.png" alt="BCLL" className="w-16 h-16 object-contain" />
-            <h2 className="text-2xl font-bold text-blue-900">Set Up Teams for Each Division</h2>
-          </div>
-
-          {['Rookies', 'Majors', 'Minors', 'Juniors'].map(divName => (
-            <div key={divName} className="mb-6 p-4 border border-gray-200 rounded-lg">
-              <h3 className="text-xl font-bold mb-3 text-blue-900">{divName}</h3>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-2">Number of Teams:</label>
-                <input
-                  type="number"
-                  value={teamCounts[divName]}
-                  onChange={e => updateTeamCount(divName, e.target.value)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg w-32"
-                  min={1}
-                  max={20}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {(divisionTeams[divName] || []).map((team, idx) => (
-                  <input
-                    key={`${divName}-${idx}`}
-                    type="text"
-                    placeholder={`Team ${idx + 1} Name`}
-                    value={team}
-                    onChange={e => updateTeamName(divName, idx, e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-
-          <button
-            onClick={() => onComplete(divisionTeams)}
-            disabled={!allTeamsNamed()}
-            className={`w-full py-3 font-bold rounded-lg ${allTeamsNamed() ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
           >
             {allTeamsNamed() ? 'Start Draft' : 'Please name all teams'}
           </button>
