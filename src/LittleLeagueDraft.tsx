@@ -298,7 +298,7 @@ const LittleLeagueDraft = () => {
                   <p className="text-xs">• Age 8 → Manual (Rookies or Minors)</p>
                   <p className="text-xs">• 9–11 → Manual (Minors or Majors)</p>
                   <p className="text-xs">• Age 12 → Majors</p>
-                  <p className="text-xs">• 13+ → Juniors</p>
+                  <p className="text-xs">• 13+ → Juniors/Intermediate</p>
                 </div>
               </div>
             </div>
