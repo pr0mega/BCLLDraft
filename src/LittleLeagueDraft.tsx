@@ -274,7 +274,17 @@ const LittleLeagueDraft = () => {
               </label>
               <p className="text-sm text-gray-500 mt-2">CSV file with player registration data</p>
             </div>
-
+<div className="text-center mt-4">
+  <a
+    href="https://bcdraft.coachteep.com/sample_players_bcll.csv"
+    target="_blank"
+    rel="noopener noreferrer"
+    className="text-blue-900 font-semibold underline hover:text-blue-700"
+  >
+    📄 Download Draft Practice File
+  </a>
+  <p className="text-sm text-gray-500">Use this sample CSV to test the draft system</p>
+</div>
             <div className="mt-6 p-4 bg-blue-50 rounded-lg">
               <div className="flex items-start">
                 <span className="text-blue-900 mr-2 text-xl">ℹ️</span>
