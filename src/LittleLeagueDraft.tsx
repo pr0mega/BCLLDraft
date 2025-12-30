@@ -14,12 +14,14 @@ const STORAGE_KEY = 'bcll-draft-state';
 const LittleLeagueDraft: React.FC = () => {
   const [step, setStep] = useState<Step>('upload');
   const [players, setPlayers] = useState<any[]>([]);
-  const [divisions, setDivisions] = useState<any[]>([
-    { name: 'Rookies', order: 1, teams: [] as string[] },
-    { name: 'Majors',  order: 2, teams: [] as string[] },
-    { name: 'Minors',  order: 3, teams: [] as string[] },
-    { name: 'Juniors', order: 4, teams: [] as string[] },
-  ]);
+const [divisions, setDivisions] = useState<any[]>([
+  { name: 'Rookies',      order: 1, teams: [] as string[] },
+  { name: 'Majors',       order: 2, teams: [] as string[] },
+  { name: 'Minors',       order: 3, teams: [] as string[] },
+  { name: 'Intermediate', order: 4, teams: [] as string[] },
+  { name: 'Juniors',      order: 5, teams: [] as string[] },
+]);
+
   const [draftState, setDraftState] = useState<any | null>(null);
   const [draftLog, setDraftLog] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<'admin' | 'display'>('admin');
@@ -857,17 +859,21 @@ const PlayerAssignment: React.FC<{
                             className="px-2 py-1 border border-gray-300 rounded"
                           >
                             <option value="">Select Division</option>
-                            {p.age === 8 ? (
-                              <>
-                                <option value="Rookies">Rookies</option>
-                                <option value="Minors">Minors</option>
-                              </>
-                            ) : (
-                              <>
-                                <option value="Minors">Minors</option>
-                                <option value="Majors">Majors</option>
-                              </>
-                            )}
+
+{p.age === 8 ? (
+  <>
+    <option value="Rookies">Rookies</option>
+    <option value="Minors">Minors</option>
+  </>
+) : (
+  <>
+    <option value="Minors">Minors</option>
+    <option value="Majors">Majors</option>
+    <option value="Intermediate">Intermediate</option>
+    <option value="Juniors">Juniors</option>
+  </>
+)}
+
                           </select>
                         </td>
                       </tr>
@@ -905,15 +911,15 @@ const TeamSetup: React.FC<{
   players: any[];
   onComplete: (dt: Record<string, string[]>) => void;
 }> = ({ divisions, players, onComplete }) => {
-  const [divisionTeams, setDivisionTeams] = useState<Record<string, string[]>>({
-    Rookies: [], Majors: [], Minors: [], Juniors: []
-  });
-  const [teamCounts, setTeamCounts] = useState<Record<string, number>>({
-    Rookies: 4, Majors: 4, Minors: 4, Juniors: 4
-  });
+ const [divisionTeams, setDivisionTeams] = useState({
+  Rookies: [], Majors: [], Minors: [], Intermediate: [], Juniors: []
+});
+const [teamCounts, setTeamCounts] = useState({
+  Rookies: 4, Majors: 4, Minors: 4, Intermediate: 4, Juniors: 4
+});
 
   const playerCounts = useMemo(() => {
-    const names = ['Rookies', 'Majors', 'Minors', 'Juniors'];
+    const names = ['Rookies', 'Majors', 'Minors','Intermediate', 'Juniors'];
     const byDiv: Record<string, number> = {};
     names.forEach(name => {
       byDiv[name] = (players || []).filter(p => p.division === name && !p.drafted).length;
@@ -958,7 +964,7 @@ const TeamSetup: React.FC<{
             </h2>
           </div>
 
-          {['Rookies', 'Majors', 'Minors', 'Juniors'].map(divName => (
+          {['Rookies', 'Majors', 'Minors', 'Intermediate', 'Juniors'].map(divName => (
             <div key={divName} className="mb-6 p-4 border border-gray-200 rounded-lg">
               <h3 className="text-xl font-bold mb-3 text-blue-900 flex items-center gap-2">
                 {divName}
