@@ -11,7 +11,8 @@ import React, { useEffect, useMemo, useState } from 'react';
  * - Age is calculated internally (for priority/highlight only) but NOT displayed
  * - Divisions can have 0 teams (skipped)
  * - After Team Setup, you can set draft order using Up/Down buttons (no drag/drop deps)
- * - ✅ Skip Pick button (advance to next pick without drafting)
+ * - ✅ Skip Pick button (advance to next TEAM) does NOT consume a pick #
+ * - ✅ Draft continues until availablePlayers is empty
  * - ✅ Sibling auto-draft removed (no forced sibling drafting)
  */
 
@@ -28,6 +29,16 @@ const DEFAULT_DIVISIONS = [
 ];
 
 const normalizeDivision = (raw: any) => String(raw ?? '').trim();
+
+// Dynamic snake (turn-based). turnIndex includes skips.
+const getSnakeTeamIndex = (turnIndex: number, teamCount: number) => {
+  if (teamCount <= 0) return -1;
+  if (teamCount === 1) return 0;
+
+  const cycle = 2 * teamCount - 2; // 0..n-1..1
+  const pos = turnIndex % cycle;
+  return pos < teamCount ? pos : cycle - pos;
+};
 
 const LittleLeagueDraft: React.FC = () => {
   const [step, setStep] = useState<Step>('upload');
@@ -122,17 +133,6 @@ const LittleLeagueDraft: React.FC = () => {
     setStep('order');
   };
 
-  const generateDraftOrder = (teamCount: number, playerCount: number) => {
-    const order: number[] = [];
-    if (teamCount <= 0) return order;
-    const rounds = Math.ceil(playerCount / teamCount);
-    for (let r = 0; r < rounds; r++) {
-      if (r % 2 === 0) for (let t = 0; t < teamCount; t++) order.push(t);
-      else for (let t = teamCount - 1; t >= 0; t--) order.push(t);
-    }
-    return order;
-  };
-
   const startDivisionDraft = (division: any) => {
     const teamCount = (division.teams || []).length;
     if (teamCount === 0) {
@@ -149,13 +149,14 @@ const LittleLeagueDraft: React.FC = () => {
 
     const teams = orderTeams.map((name: string) => ({ name, roster: [] as any[] }));
 
+    // ✅ turn-based draft; continues until availablePlayers is empty
+    // ✅ Skip does not affect draftedCount (pick #)
     setDraftState({
       division: division.name,
       teams,
       availablePlayers: divisionPlayers,
-      currentRound: 1,
-      currentPick: 0,
-      draftOrder: generateDraftOrder(teams.length, divisionPlayers.length),
+      turnIndex: 0,      // includes skips
+      draftedCount: 0,   // actual drafted players ONLY
       pickHistory: [] as any[],
     });
   };
@@ -164,36 +165,35 @@ const LittleLeagueDraft: React.FC = () => {
   const draftPlayer = (player: any) => {
     if (!draftState) return;
 
-    const teamIndex = draftState.draftOrder[draftState.currentPick];
-    if (teamIndex == null) return; // end of draft
+    const teamIndex = getSnakeTeamIndex(draftState.turnIndex, draftState.teams.length);
+    if (teamIndex < 0) return;
 
     const teams = [...draftState.teams];
     teams[teamIndex].roster.push(player);
 
     const remaining = draftState.availablePlayers.filter((p: any) => p.id !== player.id);
 
-    const nextPick = draftState.currentPick + 1;
-    const nextRound = Math.floor(nextPick / draftState.teams.length) + 1;
+    const nextTurnIndex = draftState.turnIndex + 1;
+    const nextDraftedCount = draftState.draftedCount + 1;
+
+    const pickNumber = nextDraftedCount; // 1-based, only counts drafted players
 
     const newHistory = [
       ...draftState.pickHistory,
       {
-        round: draftState.currentRound,
-        pick: draftState.currentPick + 1,
-        team: draftState.teams[teamIndex].name,
+        pick: pickNumber,
+        team: teams[teamIndex].name,
         player: player['Evaluation ID'],
         playerId: player.id,
         skipped: false,
       },
     ];
 
-    // Persistent draft log (one player)
     const logEntry = {
       ts: new Date().toISOString(),
       division: draftState.division,
-      round: draftState.currentRound,
-      pick: draftState.currentPick + 1,
-      team: draftState.teams[teamIndex].name,
+      pick: pickNumber,
+      team: teams[teamIndex].name,
       players: [
         {
           id: player.id,
@@ -210,8 +210,8 @@ const LittleLeagueDraft: React.FC = () => {
       ...draftState,
       teams,
       availablePlayers: remaining,
-      currentPick: nextPick,
-      currentRound: nextRound,
+      turnIndex: nextTurnIndex,
+      draftedCount: nextDraftedCount,
       pickHistory: newHistory,
     });
 
@@ -221,15 +221,16 @@ const LittleLeagueDraft: React.FC = () => {
   const skipPick = () => {
     if (!draftState) return;
 
-    const teamIndex = draftState.draftOrder[draftState.currentPick];
-    if (teamIndex == null) return; // end of draft
+    const teamIndex = getSnakeTeamIndex(draftState.turnIndex, draftState.teams.length);
+    if (teamIndex < 0) return;
 
-    const nextPick = draftState.currentPick + 1;
-    const nextRound = Math.floor(nextPick / draftState.teams.length) + 1;
+    const nextTurnIndex = draftState.turnIndex + 1;
+
+    // ✅ Skip does NOT increment pickNumber
+    const pickNumber = draftState.draftedCount + 1;
 
     const historyEntry = {
-      round: draftState.currentRound,
-      pick: draftState.currentPick + 1,
+      pick: pickNumber,
       team: draftState.teams[teamIndex].name,
       player: 'SKIPPED',
       playerId: null,
@@ -239,8 +240,7 @@ const LittleLeagueDraft: React.FC = () => {
     const logEntry = {
       ts: new Date().toISOString(),
       division: draftState.division,
-      round: draftState.currentRound,
-      pick: draftState.currentPick + 1,
+      pick: pickNumber,
       team: draftState.teams[teamIndex].name,
       players: [],
       skipped: true,
@@ -249,8 +249,7 @@ const LittleLeagueDraft: React.FC = () => {
 
     setDraftState({
       ...draftState,
-      currentPick: nextPick,
-      currentRound: nextRound,
+      turnIndex: nextTurnIndex,
       pickHistory: [...draftState.pickHistory, historyEntry],
     });
   };
@@ -259,24 +258,26 @@ const LittleLeagueDraft: React.FC = () => {
     if (!draftState || draftState.pickHistory.length === 0) return;
 
     const last = draftState.pickHistory[draftState.pickHistory.length - 1];
-    const lastPickIndex = draftState.currentPick - 1;
 
-    // If last action was a SKIP, just roll back pick counters/history/log
+    // Undo always rewinds one TURN
+    const prevTurnIndex = Math.max(0, draftState.turnIndex - 1);
+
+    // If last was SKIP: just rewind turn + history + log
     if (last?.skipped) {
       setDraftState({
         ...draftState,
-        currentPick: lastPickIndex,
-        currentRound: Math.floor(lastPickIndex / draftState.teams.length) + 1,
+        turnIndex: prevTurnIndex,
         pickHistory: draftState.pickHistory.slice(0, -1),
       });
       setDraftLog(prev => prev.slice(0, -1));
       return;
     }
 
-    // Otherwise: undo a drafted player
-    const teamIndex = draftState.draftOrder[lastPickIndex];
-    const teams = [...draftState.teams];
+    // Otherwise: undo drafted player
+    const teamIndex = getSnakeTeamIndex(prevTurnIndex, draftState.teams.length);
+    if (teamIndex < 0) return;
 
+    const teams = [...draftState.teams];
     const toRemoveId = last.playerId;
 
     const removed = teams[teamIndex].roster.filter((p: any) => p.id === toRemoveId);
@@ -288,8 +289,8 @@ const LittleLeagueDraft: React.FC = () => {
       ...draftState,
       teams,
       availablePlayers,
-      currentPick: lastPickIndex,
-      currentRound: Math.floor(lastPickIndex / draftState.teams.length) + 1,
+      turnIndex: prevTurnIndex,
+      draftedCount: Math.max(0, draftState.draftedCount - 1),
       pickHistory: draftState.pickHistory.slice(0, -1),
     });
 
@@ -322,7 +323,7 @@ const LittleLeagueDraft: React.FC = () => {
   };
 
   const exportDraftLog = () => {
-    const header = ['Timestamp','Division','Round','Pick','Team','Event','Evaluation ID','First Name','Last Name'];
+    const header = ['Timestamp','Division','Pick','Team','Event','Evaluation ID','First Name','Last Name'];
     const rows: string[] = [header.join(',')];
 
     draftLog.forEach((entry: any) => {
@@ -330,7 +331,6 @@ const LittleLeagueDraft: React.FC = () => {
         rows.push([
           entry.ts,
           entry.division,
-          entry.round,
           entry.pick,
           entry.team,
           'SKIPPED',
@@ -345,7 +345,6 @@ const LittleLeagueDraft: React.FC = () => {
         rows.push([
           entry.ts,
           entry.division,
-          entry.round,
           entry.pick,
           entry.team,
           'DRAFTED',
@@ -426,15 +425,13 @@ const LittleLeagueDraft: React.FC = () => {
 
       const teams = orderTeams.map((name: string) => ({ name, roster: [] as any[] }));
       const divisionPlayers = resetPlayers.filter(p => p.division === divName);
-      const draftOrder = generateDraftOrder(teams.length, divisionPlayers.length);
 
       setDraftState({
         division: divName,
         teams,
         availablePlayers: divisionPlayers,
-        currentRound: 1,
-        currentPick: 0,
-        draftOrder,
+        turnIndex: 0,
+        draftedCount: 0,
         pickHistory: [],
       });
 
@@ -563,11 +560,50 @@ const LittleLeagueDraft: React.FC = () => {
       return <DivisionSelector divisions={divisions} players={players} onSelectDivision={startDivisionDraft} />;
     }
 
+    // ✅ If division finished (no available players left), show a simple finish screen
+    if (draftState.availablePlayers.length === 0) {
+      return (
+        <div className="min-h-screen bg-gray-50 p-8">
+          <div className="max-w-3xl mx-auto bg-white rounded-lg shadow-lg p-8 text-center">
+            <h1 className="text-3xl font-bold text-blue-900 mb-2">{draftState.division} Draft Complete</h1>
+            <p className="text-gray-600 mb-6">All players have been drafted.</p>
+
+            <div className="flex justify-center gap-3 flex-wrap">
+              <button
+                onClick={exportRosters}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-900 text-yellow-400 font-semibold rounded-lg hover:bg-blue-800"
+              >
+                💾 Export Rosters
+              </button>
+              <button
+                onClick={exportDraftLog}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-700 text-yellow-200 font-semibold rounded-lg hover:bg-blue-600"
+              >
+                📝 Export Draft Log
+              </button>
+              <button
+                onClick={() => setDraftState(null)}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+              >
+                Back to Divisions
+              </button>
+              <button
+                onClick={resetApp}
+                className="px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
+              >
+                🔄 Restart Entire App
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (viewMode === 'display') {
       return <DisplayBoard draftState={draftState} onBack={() => setViewMode('admin')} />;
     }
 
-    const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
+    const currentTeamIndex = getSnakeTeamIndex(draftState.turnIndex, draftState.teams.length);
     const currentTeam = draftState.teams[currentTeamIndex];
     const oldestAge = getOldestAvailableAge();
 
@@ -584,7 +620,9 @@ const LittleLeagueDraft: React.FC = () => {
                 />
                 <div>
                   <h1 className="text-2xl font-bold text-gray-900">{draftState.division} Draft — ADMIN VIEW</h1>
-                  <p className="text-gray-600">Round {draftState.currentRound} • Pick {draftState.currentPick + 1}</p>
+                  <p className="text-gray-600">
+                    Pick {draftState.draftedCount + 1}
+                  </p>
                 </div>
               </div>
 
@@ -610,7 +648,7 @@ const LittleLeagueDraft: React.FC = () => {
                   onClick={skipPick}
                   className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-900"
                 >
-                  ⏭ Skip Pick
+                  ⏭ Skip Team
                 </button>
 
                 <button
@@ -622,7 +660,7 @@ const LittleLeagueDraft: React.FC = () => {
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
                 >
-                  ↶ Undo Last Pick
+                  ↶ Undo Last
                 </button>
 
                 <button
@@ -862,7 +900,7 @@ const DraftOrderSetup: React.FC<{
 
 // ---------- Big Screen ----------
 const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draftState, onBack }) => {
-  const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
+  const currentTeamIndex = getSnakeTeamIndex(draftState.turnIndex, draftState.teams.length);
   const currentTeam = draftState.teams[currentTeamIndex];
   const recentPicks = draftState.pickHistory.slice(-8).reverse();
 
@@ -888,7 +926,7 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
             {draftState.division} DRAFT
           </h1>
           <div className="text-center text-yellow-200 text-2xl mb-6">
-            Round {draftState.currentRound} • Pick {draftState.currentPick + 1}
+            Pick {draftState.draftedCount + 1}
           </div>
 
           <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
@@ -908,7 +946,7 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                   <div className="flex justify-between items-start">
                     <div>
                       <div className="text-yellow-200 text-sm">
-                        Round {pick.round} • Pick {pick.pick}
+                        Pick {pick.pick}
                       </div>
                       <div className="text-2xl font-bold text-yellow-400 mt-1">
                         {pick.skipped ? 'SKIPPED' : `ID: ${pick.player}`}
