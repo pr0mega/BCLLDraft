@@ -86,7 +86,6 @@ const LittleLeagueDraft: React.FC = () => {
         p.age = calculateAge(p['Player Birth Date']);
 
         // ✅ Use division from CSV (no birthdate rules)
-        // Supports a few common header variations just in case.
         const div =
           p['Division'] ??
           p['division'] ??
@@ -123,8 +122,9 @@ const LittleLeagueDraft: React.FC = () => {
   };
 
   const startDivisionDraft = (division: any) => {
+    // Allow 0 teams; just prevent starting a draft for that division
     if (!division.teams || division.teams.length === 0) {
-      alert(`Please add at least one team for ${division.name} before drafting.`);
+      alert(`${division.name} is set to 0 teams. Update Team Setup if you want to run a draft for this division.`);
       return;
     }
     const divisionPlayers = players.filter(p => !p.drafted && p.division === division.name);
@@ -258,7 +258,6 @@ const LittleLeagueDraft: React.FC = () => {
 
   const exportRosters = () => {
     if (!draftState) return;
-    // Removed "Age" column from export to match "no age" rule
     let csv =
       'Team,Evaluation ID,Player First Name,Player Last Name,Birth Date,Gender,Jersey Size,Allergies,Parent Email,Cellphone,Address\n';
 
@@ -281,7 +280,6 @@ const LittleLeagueDraft: React.FC = () => {
   };
 
   const exportDraftLog = () => {
-    // Flatten grouped log → one row per player drafted (no age)
     const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name'];
     const rows: string[] = [header.join(',')];
     draftLog.forEach((entry: any) => {
@@ -310,7 +308,6 @@ const LittleLeagueDraft: React.FC = () => {
   };
 
   // ---------- Big Screen sync (two-window) ----------
-  // Load from storage on mount
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -325,7 +322,6 @@ const LittleLeagueDraft: React.FC = () => {
     } catch {}
   }, []);
 
-  // Save to storage when admin changes state
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const isDisplay = params.get('view') === 'display';
@@ -337,7 +333,6 @@ const LittleLeagueDraft: React.FC = () => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
   }, [step, players, divisions, draftState, draftLog]);
 
-  // Listen for storage events (mirror updates)
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== STORAGE_KEY || !e.newValue) return;
@@ -360,7 +355,6 @@ const LittleLeagueDraft: React.FC = () => {
     const divName: string = draftState.division;
     if (!window.confirm(`Restart the ${divName} draft? This clears all picks and the draft log for this division.`)) return;
 
-    // Reset drafted flags for players in this division and rebuild draft state
     setPlayers(prev => {
       const resetPlayers = prev.map(p => (p.division === divName ? { ...p, drafted: false } : p));
       const divisionObj = divisions.find(d => d.name === divName);
@@ -381,7 +375,6 @@ const LittleLeagueDraft: React.FC = () => {
       return resetPlayers;
     });
 
-    // Remove this division's entries from the persistent draft log
     setDraftLog(prev => prev.filter((e: any) => e.division !== divName));
   };
 
@@ -410,7 +403,6 @@ const LittleLeagueDraft: React.FC = () => {
             String(p['Evaluation ID'] || '').toLowerCase().includes(searchTerm.toLowerCase());
           return matchesSearch;
         })
-        // keep draft priority behavior (oldest first) but never display the age
         .sort((a: any, b: any) => b.age - a.age)
     : [];
 
@@ -445,7 +437,6 @@ const LittleLeagueDraft: React.FC = () => {
               <p className="text-sm text-gray-500 mt-2">CSV file with player registration data</p>
             </div>
 
-            {/* Draft practice file link */}
             <div className="text-center mt-4">
               <a
                 href="/sample_players_bcll.csv"
@@ -469,7 +460,7 @@ const LittleLeagueDraft: React.FC = () => {
                     Cellphone, Jersey Size, Player Allergies
                   </p>
                   <p className="text-xs mt-2 text-gray-600">
-                    Note: Division is taken directly from the CSV. Ages are used internally for draft priority/highlighting,
+                    Division is taken directly from the CSV. Ages are used internally for draft priority/highlighting,
                     but are not displayed anywhere in the UI.
                   </p>
                 </div>
@@ -501,7 +492,7 @@ const LittleLeagueDraft: React.FC = () => {
 
     const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
     const currentTeam = draftState.teams[currentTeamIndex];
-    const oldestAge = getOldestAvailableAge(); // used for highlight only (not displayed)
+    const oldestAge = getOldestAvailableAge();
 
     return (
       <div className="min-h-screen bg-gray-50 p-4">
@@ -685,7 +676,7 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
             Round {draftState.currentRound} • Pick {draftState.currentPick + 1}
           </div>
 
-        <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
+          <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
             <div className="text-xl font-semibold text-blue-950 mb-2">NOW DRAFTING</div>
             <div className="text-6xl font-bold text-blue-950">
               {currentTeam?.name || '—'}
@@ -873,7 +864,7 @@ const PlayerAssignment: React.FC<{
   );
 };
 
-// ---------- Team Setup (with player counts) ----------
+// ---------- Team Setup (allow 0 teams) ----------
 const TeamSetup: React.FC<{
   divisions: any[];
   players: any[];
@@ -897,11 +888,18 @@ const TeamSetup: React.FC<{
   }, [players]);
 
   const updateTeamCount = (division: string, count: string) => {
-    const numTeams = parseInt(count) || 0;
+    let numTeams = parseInt(count);
+    if (isNaN(numTeams)) numTeams = 0;
+    if (numTeams < 0) numTeams = 0;
+
     setTeamCounts(prev => ({ ...prev, [division]: numTeams }));
+
+    // If 0 teams, clear names. Otherwise, size the array to numTeams.
     setDivisionTeams(prev => ({
       ...prev,
-      [division]: Array(numTeams).fill('').map((_, i) => prev[division]?.[i] || '')
+      [division]: numTeams === 0
+        ? []
+        : Array(numTeams).fill('').map((_, i) => prev[division]?.[i] || '')
     }));
   };
 
@@ -913,10 +911,14 @@ const TeamSetup: React.FC<{
     });
   };
 
-  const allTeamsNamed = () =>
-    Object.keys(divisionTeams).every(div =>
-      divisionTeams[div].length > 0 && divisionTeams[div].every(name => name.trim() !== '')
-    );
+  // ✅ Allow 0 teams. If >0 teams, require all names.
+  const allTeamsValid = () =>
+    Object.keys(teamCounts).every(div => {
+      const count = teamCounts[div] ?? 0;
+      if (count === 0) return true;
+      const names = divisionTeams[div] || [];
+      return names.length === count && names.every(n => n.trim() !== '');
+    });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
@@ -949,39 +951,47 @@ const TeamSetup: React.FC<{
                   value={teamCounts[divName]}
                   onChange={(e) => updateTeamCount(divName, e.target.value)}
                   className="px-4 py-2 border border-gray-300 rounded-lg w-32"
-                  min={1}
+                  min={0}
                   max={20}
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  ~{Math.ceil((playerCounts[divName] || 0) / (teamCounts[divName] || 1))} players per team (est.)
-                </p>
+                {teamCounts[divName] === 0 ? (
+                  <p className="text-xs text-gray-500 mt-1">
+                    This division will be skipped (0 teams).
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1">
+                    ~{Math.ceil((playerCounts[divName] || 0) / (teamCounts[divName] || 1))} players per team (est.)
+                  </p>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 md-grid-cols-2 gap-2">
-                {(divisionTeams[divName] || []).map((team, idx) => (
-                  <input
-                    key={`${divName}-${idx}`}
-                    type="text"
-                    placeholder={`Team ${idx + 1} Name`}
-                    value={team}
-                    onChange={(e) => updateTeamName(divName, idx, e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg"
-                  />
-                ))}
-              </div>
+              {teamCounts[divName] > 0 && (
+                <div className="grid grid-cols-1 md-grid-cols-2 gap-2">
+                  {(divisionTeams[divName] || []).map((team, idx) => (
+                    <input
+                      key={`${divName}-${idx}`}
+                      type="text"
+                      placeholder={`Team ${idx + 1} Name`}
+                      value={team}
+                      onChange={(e) => updateTeamName(divName, idx, e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg"
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ))}
 
           <button
             onClick={() => onComplete(divisionTeams)}
-            disabled={!allTeamsNamed()}
+            disabled={!allTeamsValid()}
             className={`w-full py-3 font-bold rounded-lg ${
-              allTeamsNamed()
+              allTeamsValid()
                 ? 'bg-yellow-500 text-blue-900 hover:bg-yellow-400 cursor-pointer'
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
-            {allTeamsNamed() ? 'Start Draft' : 'Please name all teams'}
+            {allTeamsValid() ? 'Start Draft' : 'Please name all teams for divisions with 1+ teams'}
           </button>
         </div>
       </div>
@@ -989,13 +999,14 @@ const TeamSetup: React.FC<{
   );
 };
 
-// ---------- Division Selector ----------
+// ---------- Division Selector (disable divisions with 0 teams) ----------
 const DivisionSelector: React.FC<{
   divisions: any[];
   players: any[];
   onSelectDivision: (d: any) => void;
 }> = ({ divisions, players, onSelectDivision }) => {
   const sorted = [...divisions].sort((a, b) => a.order - b.order);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
       <div className="max-w-4xl mx-auto">
@@ -1008,29 +1019,42 @@ const DivisionSelector: React.FC<{
             />
             <div>
               <h2 className="text-2xl font-bold text-blue-900">Select Division to Draft</h2>
-              <p className="text-gray-600">Draft Order: Rookies → Majors → Minors → Intermediate → Juniors</p>
+              <p className="text-gray-600">Divisions with 0 teams are skipped.</p>
             </div>
           </div>
 
           <div className="grid gap-4">
             {sorted.map((div, idx) => {
               const divPlayers = players.filter(p => p.division === div.name && !p.drafted);
+              const teamCount = div.teams?.length || 0;
+              const disabled = teamCount === 0;
+
               return (
                 <div
                   key={`${div.name}-${idx}`}
-                  onClick={() => onSelectDivision(div)}
-                  className="p-6 border-2 border-gray-200 rounded-lg hover:border-yellow-500 hover:shadow-lg cursor-pointer transition"
+                  onClick={() => !disabled && onSelectDivision(div)}
+                  className={`p-6 border-2 rounded-lg transition ${
+                    disabled
+                      ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                      : 'border-gray-200 hover:border-yellow-500 hover:shadow-lg cursor-pointer'
+                  }`}
                 >
                   <div className="flex justify-between items-center">
                     <div>
                       <h3 className="text-xl font-bold mb-2 text-blue-900">{div.name}</h3>
                       <p className="text-gray-600">
-                        {div.teams?.length || 0} teams • {divPlayers.length} players available
+                        {teamCount} teams • {divPlayers.length} players available
                       </p>
-                      {div.teams && div.teams.length > 0 && (
+                      {disabled ? (
                         <div className="mt-2 text-sm text-gray-500">
-                          Teams: {div.teams.join(', ')}
+                          Skipped (0 teams)
                         </div>
+                      ) : (
+                        teamCount > 0 && (
+                          <div className="mt-2 text-sm text-gray-500">
+                            Teams: {div.teams.join(', ')}
+                          </div>
+                        )
                       )}
                     </div>
                     <div className="text-4xl font-bold text-blue-900 opacity-20">{div.order}</div>
