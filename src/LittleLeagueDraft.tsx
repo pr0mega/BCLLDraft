@@ -1,22 +1,46 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  arrayMove,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 /**
  * Little League Draft App
  * Option A: Two-window Local Sync via localStorage
  * - Admin window controls the draft
  * - Big Screen: open the same page with ?view=display (read-only mirror)
+ *
+ * ✅ Updates included:
+ * - Division is taken from CSV "Division" column (no birthdate rules)
+ * - Age is calculated internally only (for highlight/priority), never displayed
+ * - Exports remove Age
+ * - Divisions can have 0 teams (skipped)
+ * - NEW: After naming teams, you set draft order with drag/drop per division
  */
 
-type Step = 'upload' | 'assign' | 'teams' | 'draft';
+type Step = 'upload' | 'assign' | 'teams' | 'order' | 'draft';
 
 const STORAGE_KEY = 'bcll-draft-state';
 
 const DEFAULT_DIVISIONS = [
-  { name: 'Rookies',      order: 1, teams: [] as string[] },
-  { name: 'Majors',       order: 2, teams: [] as string[] },
-  { name: 'Minors',       order: 3, teams: [] as string[] },
-  { name: 'Intermediate', order: 4, teams: [] as string[] },
-  { name: 'Juniors',      order: 5, teams: [] as string[] },
+  { name: 'Rookies',      order: 1, teams: [] as string[], draftOrderTeams: [] as string[] },
+  { name: 'Majors',       order: 2, teams: [] as string[], draftOrderTeams: [] as string[] },
+  { name: 'Minors',       order: 3, teams: [] as string[], draftOrderTeams: [] as string[] },
+  { name: 'Intermediate', order: 4, teams: [] as string[], draftOrderTeams: [] as string[] },
+  { name: 'Juniors',      order: 5, teams: [] as string[], draftOrderTeams: [] as string[] },
 ];
 
 const normalizeDivision = (raw: any) => String(raw ?? '').trim();
@@ -30,7 +54,7 @@ const LittleLeagueDraft: React.FC = () => {
   const [draftLog, setDraftLog] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<'admin' | 'display'>('admin');
 
-  // Admin view filters/search
+  // Admin view search
   const [searchTerm, setSearchTerm] = useState('');
 
   // ---------- Helpers ----------
@@ -51,14 +75,11 @@ const LittleLeagueDraft: React.FC = () => {
     let inQuotes = false;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
-      if (ch === '"') {
-        inQuotes = !inQuotes;
-      } else if (ch === ',' && !inQuotes) {
+      if (ch === '"') inQuotes = !inQuotes;
+      else if (ch === ',' && !inQuotes) {
         out.push(cur.trim());
         cur = '';
-      } else {
-        cur += ch;
-      }
+      } else cur += ch;
     }
     out.push(cur.trim());
     return out;
@@ -82,10 +103,10 @@ const LittleLeagueDraft: React.FC = () => {
         headers.forEach((h, i) => (p[h] = vals[i] ?? ''));
         p.id = `player-${idx}`;
 
-        // Keep age internally for draft priority/highlight (not displayed anywhere)
+        // Keep age internally (highlight/priority only; not displayed)
         p.age = calculateAge(p['Player Birth Date']);
 
-        // ✅ Use division from CSV (no birthdate rules)
+        // ✅ Division from CSV (supports common header variations)
         const div =
           p['Division'] ??
           p['division'] ??
@@ -116,19 +137,34 @@ const LittleLeagueDraft: React.FC = () => {
 
   // ---------- Teams / Divisions ----------
   const finishAssignment = (divisionTeams: Record<string, string[]>) => {
-    const updated = divisions.map(d => ({ ...d, teams: divisionTeams[d.name] || [] }));
+    // Save teams + initialize draftOrderTeams (default = entered order)
+    const updated = divisions.map(d => {
+      const teams = divisionTeams[d.name] || [];
+      return {
+        ...d,
+        teams,
+        draftOrderTeams: [...teams],
+      };
+    });
     setDivisions(updated);
-    setStep('draft');
+    setStep('order');
   };
 
   const startDivisionDraft = (division: any) => {
-    // Allow 0 teams; just prevent starting a draft for that division
     if (!division.teams || division.teams.length === 0) {
       alert(`${division.name} is set to 0 teams. Update Team Setup if you want to run a draft for this division.`);
       return;
     }
+
     const divisionPlayers = players.filter(p => !p.drafted && p.division === division.name);
-    const teams = division.teams.map((name: string) => ({ name, roster: [] as any[] }));
+
+    const orderTeams =
+      Array.isArray(division.draftOrderTeams) && division.draftOrderTeams.length > 0
+        ? division.draftOrderTeams
+        : division.teams;
+
+    const teams = orderTeams.map((name: string) => ({ name, roster: [] as any[] }));
+
     setDraftState({
       division: division.name,
       teams,
@@ -155,7 +191,7 @@ const LittleLeagueDraft: React.FC = () => {
   const draftPlayer = (player: any) => {
     if (!draftState) return;
     const teamIndex = draftState.draftOrder[draftState.currentPick];
-    if (teamIndex == null) return; // end of draft
+    if (teamIndex == null) return;
 
     const teams = [...draftState.teams];
     teams[teamIndex].roster.push(player);
@@ -200,7 +236,7 @@ const LittleLeagueDraft: React.FC = () => {
       },
     ];
 
-    // Append to persistent draftLog (grouped pick) — no age stored/exported
+    // Persistent log (no age)
     const logEntry = {
       ts: new Date().toISOString(),
       division: draftState.division,
@@ -252,7 +288,6 @@ const LittleLeagueDraft: React.FC = () => {
 
     setPlayers(prev => prev.map(p => (toRemove.includes(p.id) ? { ...p, drafted: false } : p)));
 
-    // Remove last group from persistent log as well
     setDraftLog(prev => prev.slice(0, -1));
   };
 
@@ -282,6 +317,7 @@ const LittleLeagueDraft: React.FC = () => {
   const exportDraftLog = () => {
     const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name'];
     const rows: string[] = [header.join(',')];
+
     draftLog.forEach((entry: any) => {
       entry.players.forEach((pl: any) => {
         rows.push([
@@ -296,6 +332,7 @@ const LittleLeagueDraft: React.FC = () => {
         ].join(','));
       });
     });
+
     const blob = new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -358,7 +395,13 @@ const LittleLeagueDraft: React.FC = () => {
     setPlayers(prev => {
       const resetPlayers = prev.map(p => (p.division === divName ? { ...p, drafted: false } : p));
       const divisionObj = divisions.find(d => d.name === divName);
-      const teams = (divisionObj?.teams || []).map((name: string) => ({ name, roster: [] as any[] }));
+
+      const orderTeams =
+        Array.isArray(divisionObj?.draftOrderTeams) && divisionObj.draftOrderTeams.length > 0
+          ? divisionObj.draftOrderTeams
+          : (divisionObj?.teams || []);
+
+      const teams = orderTeams.map((name: string) => ({ name, roster: [] as any[] }));
       const divisionPlayers = resetPlayers.filter(p => p.division === divName);
       const draftOrder = generateDraftOrder(teams.length, divisionPlayers.length);
 
@@ -481,6 +524,17 @@ const LittleLeagueDraft: React.FC = () => {
     return <TeamSetup divisions={divisions} players={players} onComplete={finishAssignment} />;
   }
 
+  if (step === 'order') {
+    return (
+      <DraftOrderSetup
+        divisions={divisions}
+        setDivisions={setDivisions}
+        onBack={() => setStep('teams')}
+        onContinue={() => setStep('draft')}
+      />
+    );
+  }
+
   if (step === 'draft') {
     if (!draftState) {
       return <DivisionSelector divisions={divisions} players={players} onSelectDivision={startDivisionDraft} />;
@@ -492,7 +546,7 @@ const LittleLeagueDraft: React.FC = () => {
 
     const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
     const currentTeam = draftState.teams[currentTeamIndex];
-    const oldestAge = getOldestAvailableAge();
+    const oldestAge = getOldestAvailableAge(); // highlight only
 
     return (
       <div className="min-h-screen bg-gray-50 p-4">
@@ -643,6 +697,171 @@ const LittleLeagueDraft: React.FC = () => {
   }
 
   return null;
+};
+
+// -------------------------
+// Drag/Drop Draft Order UI
+// -------------------------
+const SortableTeamRow: React.FC<{ id: string; index: number }> = ({ id, index }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.7 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center justify-between p-3 border rounded-lg bg-gray-50 ${
+        isDragging ? 'border-yellow-500 shadow-md' : 'border-gray-200'
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className="cursor-grab select-none text-lg"
+          title="Drag to reorder"
+          {...attributes}
+          {...listeners}
+        >
+          ☰
+        </span>
+        <div>
+          <div className="text-sm text-gray-500">Pick {index + 1}</div>
+          <div className="font-semibold text-blue-900">{id}</div>
+        </div>
+      </div>
+      <div className="text-xs text-gray-500">Drag</div>
+    </div>
+  );
+};
+
+const DraftOrderSetup: React.FC<{
+  divisions: any[];
+  setDivisions: React.Dispatch<any>;
+  onBack: () => void;
+  onContinue: () => void;
+}> = ({ divisions, setDivisions, onBack, onContinue }) => {
+  const sortedDivs = [...divisions].sort((a, b) => a.order - b.order);
+  const [selected, setSelected] = useState(sortedDivs[0]?.name || '');
+
+  const selectedDiv = divisions.find(d => d.name === selected);
+  const order: string[] =
+    (Array.isArray(selectedDiv?.draftOrderTeams) && selectedDiv.draftOrderTeams.length >= 0
+      ? selectedDiv.draftOrderTeams
+      : selectedDiv?.teams) || [];
+
+  // Sensors: pointer + keyboard
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const onDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+    if (active.id === over.id) return;
+
+    const oldIndex = order.indexOf(String(active.id));
+    const newIndex = order.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const nextOrder = arrayMove(order, oldIndex, newIndex);
+
+    setDivisions((prev: any[]) =>
+      prev.map(d => (d.name === selected ? { ...d, draftOrderTeams: nextOrder } : d))
+    );
+  };
+
+  const resetToEnteredOrder = () => {
+    if (!selectedDiv) return;
+    const nextOrder = [...(selectedDiv.teams || [])];
+    setDivisions((prev: any[]) =>
+      prev.map(d => (d.name === selected ? { ...d, draftOrderTeams: nextOrder } : d))
+    );
+  };
+
+  const hasTeams = (selectedDiv?.teams?.length || 0) > 0;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-950 to-blue-900 p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-lg shadow-lg p-8">
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <div>
+              <h2 className="text-2xl font-bold text-blue-900">Set Draft Order (Drag & Drop)</h2>
+              <p className="text-gray-600">
+                Pick a division, then drag teams to set Pick 1 → Pick N.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={onBack}
+                className="px-4 py-2 rounded-lg bg-gray-600 text-white hover:bg-gray-700"
+              >
+                ← Back
+              </button>
+              <button
+                onClick={onContinue}
+                className="px-4 py-2 rounded-lg bg-yellow-500 text-blue-900 font-semibold hover:bg-yellow-400"
+              >
+                Continue →
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-6 flex items-end gap-3 flex-wrap">
+            <div>
+              <label className="block text-sm font-medium mb-2">Division</label>
+              <select
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                {sortedDivs.map((d) => (
+                  <option key={d.name} value={d.name}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={resetToEnteredOrder}
+              disabled={!hasTeams}
+              className={`px-4 py-2 rounded-lg font-semibold ${
+                hasTeams ? 'bg-blue-900 text-white hover:bg-blue-800' : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+              }`}
+            >
+              Reset to Entered Order
+            </button>
+          </div>
+
+          {!hasTeams ? (
+            <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+              This division has 0 teams — it will be skipped.
+            </div>
+          ) : (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={order} strategy={verticalListSortingStrategy}>
+                <div className="space-y-2">
+                  {order.map((teamName, idx) => (
+                    <SortableTeamRow key={teamName} id={teamName} index={idx} />
+                  ))}
+                </div>
+              </SortableContext>
+
+              <div className="mt-4 text-sm text-gray-500">
+                Tip: You can also reorder with keyboard — click a row, then use arrow keys (screen-reader friendly).
+              </div>
+            </DndContext>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // ---------- Big Screen ----------
@@ -894,7 +1113,6 @@ const TeamSetup: React.FC<{
 
     setTeamCounts(prev => ({ ...prev, [division]: numTeams }));
 
-    // If 0 teams, clear names. Otherwise, size the array to numTeams.
     setDivisionTeams(prev => ({
       ...prev,
       [division]: numTeams === 0
@@ -911,7 +1129,6 @@ const TeamSetup: React.FC<{
     });
   };
 
-  // ✅ Allow 0 teams. If >0 teams, require all names.
   const allTeamsValid = () =>
     Object.keys(teamCounts).every(div => {
       const count = teamCounts[div] ?? 0;
@@ -991,7 +1208,7 @@ const TeamSetup: React.FC<{
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
-            {allTeamsValid() ? 'Start Draft' : 'Please name all teams for divisions with 1+ teams'}
+            {allTeamsValid() ? 'Next: Set Draft Order' : 'Please name all teams for divisions with 1+ teams'}
           </button>
         </div>
       </div>
@@ -999,7 +1216,7 @@ const TeamSetup: React.FC<{
   );
 };
 
-// ---------- Division Selector (disable divisions with 0 teams) ----------
+// ---------- Division Selector (disable 0-team divisions) ----------
 const DivisionSelector: React.FC<{
   divisions: any[];
   players: any[];
@@ -1071,3 +1288,10 @@ const DivisionSelector: React.FC<{
 };
 
 export default LittleLeagueDraft;
+
+/**
+ * ✅ Dependency notes (do this once in your repo):
+ *   npm i @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities
+ * or
+ *   yarn add @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities
+ */
