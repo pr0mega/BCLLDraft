@@ -11,6 +11,8 @@ import React, { useEffect, useMemo, useState } from 'react';
  * - Age is calculated internally (for priority/highlight only) but NOT displayed
  * - Divisions can have 0 teams (skipped)
  * - After Team Setup, you can set draft order using Up/Down buttons (no drag/drop deps)
+ * - ✅ Skip Pick button (advance to next pick without drafting)
+ * - ✅ Sibling auto-draft removed (no forced sibling drafting)
  */
 
 type Step = 'upload' | 'assign' | 'teams' | 'order' | 'draft';
@@ -106,17 +108,6 @@ const LittleLeagueDraft: React.FC = () => {
     reader.readAsText(file);
   };
 
-  // ---------- Siblings ----------
-  const findSiblings = (list: any[]) => {
-    const groups: Record<string, string[]> = {};
-    list.forEach(p => {
-      const key = `${(p['Account Last Name'] || '').toLowerCase()}-${(p['Street Address'] || '').toLowerCase()}`;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(p.id);
-    });
-    return Object.values(groups).filter(g => g.length > 1);
-  };
-
   // ---------- Teams / Divisions ----------
   const finishAssignment = (divisionTeams: Record<string, string[]>) => {
     const updated = divisions.map(d => {
@@ -129,6 +120,17 @@ const LittleLeagueDraft: React.FC = () => {
     });
     setDivisions(updated);
     setStep('order');
+  };
+
+  const generateDraftOrder = (teamCount: number, playerCount: number) => {
+    const order: number[] = [];
+    if (teamCount <= 0) return order;
+    const rounds = Math.ceil(playerCount / teamCount);
+    for (let r = 0; r < rounds; r++) {
+      if (r % 2 === 0) for (let t = 0; t < teamCount; t++) order.push(t);
+      else for (let t = teamCount - 1; t >= 0; t--) order.push(t);
+    }
+    return order;
   };
 
   const startDivisionDraft = (division: any) => {
@@ -158,50 +160,18 @@ const LittleLeagueDraft: React.FC = () => {
     });
   };
 
-  const generateDraftOrder = (teamCount: number, playerCount: number) => {
-    const order: number[] = [];
-    if (teamCount <= 0) return order;
-    const rounds = Math.ceil(playerCount / teamCount);
-    for (let r = 0; r < rounds; r++) {
-      if (r % 2 === 0) for (let t = 0; t < teamCount; t++) order.push(t);
-      else for (let t = teamCount - 1; t >= 0; t--) order.push(t);
-    }
-    return order;
-  };
-
   // ---------- Draft actions ----------
   const draftPlayer = (player: any) => {
     if (!draftState) return;
+
     const teamIndex = draftState.draftOrder[draftState.currentPick];
-    if (teamIndex == null) return;
+    if (teamIndex == null) return; // end of draft
 
     const teams = [...draftState.teams];
     teams[teamIndex].roster.push(player);
 
     const remaining = draftState.availablePlayers.filter((p: any) => p.id !== player.id);
 
-    // Auto-place siblings onto the same team
-    const siblingGroups = findSiblings(players);
-    const group = siblingGroups.find(g => g.includes(player.id));
-    const siblingEvalIds: string[] = [];
-    const siblingIds: string[] = [];
-    const pickedGroupPlayers: any[] = [player];
-
-    if (group) {
-      group.forEach(id => {
-        if (id !== player.id) {
-          const sib = remaining.find((p: any) => p.id === id);
-          if (sib) {
-            teams[teamIndex].roster.push(sib);
-            siblingEvalIds.push(sib['Evaluation ID']);
-            siblingIds.push(sib.id);
-            pickedGroupPlayers.push(sib);
-          }
-        }
-      });
-    }
-
-    const remainingAfterSibs = remaining.filter((p: any) => !siblingIds.includes(p.id));
     const nextPick = draftState.currentPick + 1;
     const nextRound = Math.floor(nextPick / draftState.teams.length) + 1;
 
@@ -213,54 +183,104 @@ const LittleLeagueDraft: React.FC = () => {
         team: draftState.teams[teamIndex].name,
         player: player['Evaluation ID'],
         playerId: player.id,
-        siblings: siblingEvalIds,
-        siblingIds,
+        skipped: false,
       },
     ];
 
-    // Persistent draft log (no age)
+    // Persistent draft log (one player)
     const logEntry = {
       ts: new Date().toISOString(),
       division: draftState.division,
       round: draftState.currentRound,
       pick: draftState.currentPick + 1,
       team: draftState.teams[teamIndex].name,
-      players: pickedGroupPlayers.map(p => ({
-        id: p.id,
-        evalId: p['Evaluation ID'] || '',
-        firstName: p['Player First Name'] || '',
-        lastName: p['Player Last Name'] || '',
-      })),
+      players: [
+        {
+          id: player.id,
+          evalId: player['Evaluation ID'] || '',
+          firstName: player['Player First Name'] || '',
+          lastName: player['Player Last Name'] || '',
+        },
+      ],
+      skipped: false,
     };
     setDraftLog(prev => [...prev, logEntry]);
 
     setDraftState({
       ...draftState,
       teams,
-      availablePlayers: remainingAfterSibs,
+      availablePlayers: remaining,
       currentPick: nextPick,
       currentRound: nextRound,
       pickHistory: newHistory,
     });
 
-    setPlayers(prev =>
-      prev.map(p =>
-        (p.id === player.id || siblingIds.includes(p.id)) ? { ...p, drafted: true } : p
-      )
-    );
+    setPlayers(prev => prev.map(p => (p.id === player.id ? { ...p, drafted: true } : p)));
+  };
+
+  const skipPick = () => {
+    if (!draftState) return;
+
+    const teamIndex = draftState.draftOrder[draftState.currentPick];
+    if (teamIndex == null) return; // end of draft
+
+    const nextPick = draftState.currentPick + 1;
+    const nextRound = Math.floor(nextPick / draftState.teams.length) + 1;
+
+    const historyEntry = {
+      round: draftState.currentRound,
+      pick: draftState.currentPick + 1,
+      team: draftState.teams[teamIndex].name,
+      player: 'SKIPPED',
+      playerId: null,
+      skipped: true,
+    };
+
+    const logEntry = {
+      ts: new Date().toISOString(),
+      division: draftState.division,
+      round: draftState.currentRound,
+      pick: draftState.currentPick + 1,
+      team: draftState.teams[teamIndex].name,
+      players: [],
+      skipped: true,
+    };
+    setDraftLog(prev => [...prev, logEntry]);
+
+    setDraftState({
+      ...draftState,
+      currentPick: nextPick,
+      currentRound: nextRound,
+      pickHistory: [...draftState.pickHistory, historyEntry],
+    });
   };
 
   const undoLastPick = () => {
     if (!draftState || draftState.pickHistory.length === 0) return;
+
     const last = draftState.pickHistory[draftState.pickHistory.length - 1];
     const lastPickIndex = draftState.currentPick - 1;
+
+    // If last action was a SKIP, just roll back pick counters/history/log
+    if (last?.skipped) {
+      setDraftState({
+        ...draftState,
+        currentPick: lastPickIndex,
+        currentRound: Math.floor(lastPickIndex / draftState.teams.length) + 1,
+        pickHistory: draftState.pickHistory.slice(0, -1),
+      });
+      setDraftLog(prev => prev.slice(0, -1));
+      return;
+    }
+
+    // Otherwise: undo a drafted player
     const teamIndex = draftState.draftOrder[lastPickIndex];
-
     const teams = [...draftState.teams];
-    const toRemove = [last.playerId, ...(last.siblingIds || [])];
 
-    const removed = teams[teamIndex].roster.filter((p: any) => toRemove.includes(p.id));
-    teams[teamIndex].roster = teams[teamIndex].roster.filter((p: any) => !toRemove.includes(p.id));
+    const toRemoveId = last.playerId;
+
+    const removed = teams[teamIndex].roster.filter((p: any) => p.id === toRemoveId);
+    teams[teamIndex].roster = teams[teamIndex].roster.filter((p: any) => p.id !== toRemoveId);
 
     const availablePlayers = [...draftState.availablePlayers, ...removed];
 
@@ -273,7 +293,7 @@ const LittleLeagueDraft: React.FC = () => {
       pickHistory: draftState.pickHistory.slice(0, -1),
     });
 
-    setPlayers(prev => prev.map(p => (toRemove.includes(p.id) ? { ...p, drafted: false } : p)));
+    setPlayers(prev => prev.map(p => (p.id === toRemoveId ? { ...p, drafted: false } : p)));
     setDraftLog(prev => prev.slice(0, -1));
   };
 
@@ -302,10 +322,25 @@ const LittleLeagueDraft: React.FC = () => {
   };
 
   const exportDraftLog = () => {
-    const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name'];
+    const header = ['Timestamp','Division','Round','Pick','Team','Event','Evaluation ID','First Name','Last Name'];
     const rows: string[] = [header.join(',')];
 
     draftLog.forEach((entry: any) => {
+      if (entry.skipped) {
+        rows.push([
+          entry.ts,
+          entry.division,
+          entry.round,
+          entry.pick,
+          entry.team,
+          'SKIPPED',
+          '',
+          '',
+          '',
+        ].join(','));
+        return;
+      }
+
       entry.players.forEach((pl: any) => {
         rows.push([
           entry.ts,
@@ -313,6 +348,7 @@ const LittleLeagueDraft: React.FC = () => {
           entry.round,
           entry.pick,
           entry.team,
+          'DRAFTED',
           `"${pl.evalId}"`,
           `"${pl.firstName}"`,
           `"${pl.lastName}"`,
@@ -568,6 +604,13 @@ const LittleLeagueDraft: React.FC = () => {
                   className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-blue-900 font-semibold rounded-lg hover:bg-yellow-400"
                 >
                   📺 Open Big Screen
+                </button>
+
+                <button
+                  onClick={skipPick}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-900"
+                >
+                  ⏭ Skip Pick
                 </button>
 
                 <button
@@ -868,13 +911,8 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                         Round {pick.round} • Pick {pick.pick}
                       </div>
                       <div className="text-2xl font-bold text-yellow-400 mt-1">
-                        ID: {pick.player}
+                        {pick.skipped ? 'SKIPPED' : `ID: ${pick.player}`}
                       </div>
-                      {pick.siblings && pick.siblings.length > 0 && (
-                        <div className="text-yellow-300 text-xs mt-1">
-                          + Siblings: {pick.siblings.join(', ')}
-                        </div>
-                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-xl font-bold text-yellow-400">
