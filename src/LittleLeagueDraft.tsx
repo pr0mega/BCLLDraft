@@ -30,15 +30,23 @@ const DEFAULT_DIVISIONS = [
 
 const normalizeDivision = (raw: any) => String(raw ?? '').trim();
 
-// Dynamic snake (turn-based). turnIndex includes skips.
+// Serpentine that repeats the ends: 0,1,2,2,1,0,0,1,2,2,1,0...
 const getSnakeTeamIndex = (turnIndex: number, teamCount: number) => {
   if (teamCount <= 0) return -1;
   if (teamCount === 1) return 0;
 
-  const cycle = 2 * teamCount - 2; // 0..n-1..1
+  // Cycle length is 2*teamCount because endpoints are duplicated
+  // Example n=3 => 0,1,2,2,1,0 then repeat
+  const cycle = 2 * teamCount;
   const pos = turnIndex % cycle;
-  return pos < teamCount ? pos : cycle - pos;
+
+  // Forward: 0..n-1
+  if (pos < teamCount) return pos;
+
+  // Backward: n-1..0 (with n-1 duplicated)
+  return cycle - 1 - pos;
 };
+
 
 const LittleLeagueDraft: React.FC = () => {
   const [step, setStep] = useState<Step>('upload');
