@@ -11,16 +11,18 @@ type Step = 'upload' | 'assign' | 'teams' | 'draft';
 
 const STORAGE_KEY = 'bcll-draft-state';
 
-const LittleLeagueDraft: React.FC = () => {
-  const [step, setStep] = useState<Step>('upload');
-  const [players, setPlayers] = useState<any[]>([]);
-const [divisions, setDivisions] = useState<any[]>([
+const DEFAULT_DIVISIONS = [
   { name: 'Rookies',      order: 1, teams: [] as string[] },
   { name: 'Majors',       order: 2, teams: [] as string[] },
   { name: 'Minors',       order: 3, teams: [] as string[] },
   { name: 'Intermediate', order: 4, teams: [] as string[] },
   { name: 'Juniors',      order: 5, teams: [] as string[] },
-]);
+];
+
+const LittleLeagueDraft: React.FC = () => {
+  const [step, setStep] = useState<Step>('upload');
+  const [players, setPlayers] = useState<any[]>([]);
+  const [divisions, setDivisions] = useState<any[]>(DEFAULT_DIVISIONS);
 
   const [draftState, setDraftState] = useState<any | null>(null);
   const [draftLog, setDraftLog] = useState<any[]>([]);
@@ -28,7 +30,6 @@ const [divisions, setDivisions] = useState<any[]>([
 
   // Admin view filters/search
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterAge, setFilterAge] = useState<'all' | string>('all');
 
   // ---------- Helpers ----------
   const calculateAge = (birthDate: string) => {
@@ -78,12 +79,14 @@ const [divisions, setDivisions] = useState<any[]>([
         const p: any = {};
         headers.forEach((h, i) => (p[h] = vals[i] ?? ''));
         p.id = `player-${idx}`;
-        p.age = calculateAge(p['Player Birth Date']);
+        p.age = calculateAge(p['Player Birth Date']); // keep internally (used for auto-division + draft priority)
+
         // Auto-assign division
         if (p.age < 8) p.division = 'Rookies';
         else if (p.age === 12) p.division = 'Majors';
         else if (p.age >= 13) p.division = 'Juniors';
         else p.division = ''; // needs manual assignment
+
         return p;
       });
 
@@ -157,6 +160,7 @@ const [divisions, setDivisions] = useState<any[]>([
     const siblingNames: string[] = [];
     const siblingIds: string[] = [];
     const pickedGroupPlayers: any[] = [player];
+
     if (group) {
       group.forEach(id => {
         if (id !== player.id) {
@@ -183,13 +187,12 @@ const [divisions, setDivisions] = useState<any[]>([
         team: draftState.teams[teamIndex].name,
         player: player['Evaluation ID'],
         playerId: player.id,
-        age: player.age,
         siblings: siblingNames,
         siblingIds,
       },
     ];
 
-    // Append to persistent draftLog (grouped pick)
+    // Append to persistent draftLog (grouped pick) — no age stored/exported
     const logEntry = {
       ts: new Date().toISOString(),
       division: draftState.division,
@@ -201,7 +204,6 @@ const [divisions, setDivisions] = useState<any[]>([
         evalId: p['Evaluation ID'] || '',
         firstName: p['Player First Name'] || '',
         lastName: p['Player Last Name'] || '',
-        age: p.age || '',
       })),
     };
     setDraftLog(prev => [...prev, logEntry]);
@@ -226,8 +228,8 @@ const [divisions, setDivisions] = useState<any[]>([
 
     const teams = [...draftState.teams];
     const toRemove = [last.playerId, ...(last.siblingIds || [])];
-    const removed = teams[teamIndex].roster.filter(p => toRemove.includes(p.id));
-    teams[teamIndex].roster = teams[teamIndex].roster.filter(p => !toRemove.includes(p.id));
+    const removed = teams[teamIndex].roster.filter((p: any) => toRemove.includes(p.id));
+    teams[teamIndex].roster = teams[teamIndex].roster.filter((p: any) => !toRemove.includes(p.id));
 
     const availablePlayers = [...draftState.availablePlayers, ...removed];
 
@@ -248,13 +250,17 @@ const [divisions, setDivisions] = useState<any[]>([
 
   const exportRosters = () => {
     if (!draftState) return;
-    let csv = 'Team,Evaluation ID,Player First Name,Player Last Name,Birth Date,Age,Gender,Jersey Size,Allergies,Parent Email,Cellphone,Address\n';
+    // Removed "Age" column from export to match "no age" rule
+    let csv =
+      'Team,Evaluation ID,Player First Name,Player Last Name,Birth Date,Gender,Jersey Size,Allergies,Parent Email,Cellphone,Address\n';
+
     draftState.teams.forEach((team: any) => {
       team.roster.forEach((p: any) => {
         const addr = `${p['Street Address'] || ''}, ${p['City'] || ''}, ${p['State'] || ''} ${p['Postal Code'] || ''}`.trim();
-        csv += `${team.name},"${p['Evaluation ID'] || ''}","${p['Player First Name'] || ''}","${p['Player Last Name'] || ''}","${p['Player Birth Date'] || ''}",${p.age || ''},"${p['Player Gender'] || ''}","${p['Jersey Size'] || ''}","${p['Player Allergies'] || ''}","${p['User Email'] || ''}","${p['Cellphone'] || ''}","${addr}"\n`;
+        csv += `${team.name},"${p['Evaluation ID'] || ''}","${p['Player First Name'] || ''}","${p['Player Last Name'] || ''}","${p['Player Birth Date'] || ''}","${p['Player Gender'] || ''}","${p['Jersey Size'] || ''}","${p['Player Allergies'] || ''}","${p['User Email'] || ''}","${p['Cellphone'] || ''}","${addr}"\n`;
       });
     });
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -267,8 +273,8 @@ const [divisions, setDivisions] = useState<any[]>([
   };
 
   const exportDraftLog = () => {
-    // Flatten grouped log → one row per player drafted
-    const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name','Age'];
+    // Flatten grouped log → one row per player drafted (no age)
+    const header = ['Timestamp','Division','Round','Pick','Team','Evaluation ID','First Name','Last Name'];
     const rows: string[] = [header.join(',')];
     draftLog.forEach((entry: any) => {
       entry.players.forEach((pl: any) => {
@@ -281,7 +287,6 @@ const [divisions, setDivisions] = useState<any[]>([
           `"${pl.evalId}"`,
           `"${pl.firstName}"`,
           `"${pl.lastName}"`,
-          pl.age,
         ].join(','));
       });
     });
@@ -376,12 +381,7 @@ const [divisions, setDivisions] = useState<any[]>([
     if (!window.confirm('Restart entire draft? This will erase ALL data and return to the upload screen.')) return;
     localStorage.removeItem(STORAGE_KEY);
     setPlayers([]);
-    setDivisions([
-      { name: 'Rookies', order: 1, teams: [] },
-      { name: 'Majors', order: 2, teams: [] },
-      { name: 'Minors', order: 3, teams: [] },
-      { name: 'Juniors', order: 4, teams: [] },
-    ]);
+    setDivisions(DEFAULT_DIVISIONS);
     setDraftState(null);
     setDraftLog([]);
     setStep('upload');
@@ -397,15 +397,13 @@ const [divisions, setDivisions] = useState<any[]>([
   const filteredPlayers = draftState
     ? draftState.availablePlayers
         .filter((p: any) => {
-          const matchesSearch = !searchTerm || String(p['Evaluation ID'] || '').toLowerCase().includes(searchTerm.toLowerCase());
-          const matchesAge = filterAge === 'all' || p.age === parseInt(filterAge);
-          return matchesSearch && matchesAge;
+          const matchesSearch =
+            !searchTerm ||
+            String(p['Evaluation ID'] || '').toLowerCase().includes(searchTerm.toLowerCase());
+          return matchesSearch;
         })
+        // keep draft priority behavior (oldest first) but never display the age
         .sort((a: any, b: any) => b.age - a.age)
-    : [];
-
-  const availableAges = draftState
-    ? [...new Set(draftState.availablePlayers.map((p: any) => p.age))].sort((a: number, b: number) => b - a)
     : [];
 
   // ---------- Renders ----------
@@ -468,9 +466,13 @@ const [divisions, setDivisions] = useState<any[]>([
                   <p className="text-xs">• 9–11 → Manual (Minors or Majors)</p>
                   <p className="text-xs">• Age 12 → Majors</p>
                   <p className="text-xs">• 13+ → Juniors</p>
+                  <p className="text-xs mt-2 text-gray-600">
+                    Note: Ages are used internally for division rules and draft priority, but are not displayed anywhere in the UI.
+                  </p>
                 </div>
               </div>
             </div>
+
           </div>
         </div>
       </div>
@@ -496,7 +498,7 @@ const [divisions, setDivisions] = useState<any[]>([
 
     const currentTeamIndex = draftState.draftOrder[draftState.currentPick];
     const currentTeam = draftState.teams[currentTeamIndex];
-    const oldestAge = getOldestAvailableAge();
+    const oldestAge = getOldestAvailableAge(); // used for highlight only (not displayed)
 
     return (
       <div className="min-h-screen bg-gray-50 p-4">
@@ -523,6 +525,7 @@ const [divisions, setDivisions] = useState<any[]>([
                 >
                   ⟲ Restart Draft
                 </button>
+
                 {/* Open Big Screen in a new window with ?view=display */}
                 <button
                   onClick={() => {
@@ -545,24 +548,28 @@ const [divisions, setDivisions] = useState<any[]>([
                 >
                   ↶ Undo Last Pick
                 </button>
+
                 <button
                   onClick={exportRosters}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-900 text-yellow-400 font-semibold rounded-lg hover:bg-blue-800"
                 >
                   💾 Export Rosters
                 </button>
+
                 <button
                   onClick={exportDraftLog}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-700 text-yellow-200 font-semibold rounded-lg hover:bg-blue-600"
                 >
                   📝 Export Draft Log
                 </button>
+
                 <button
                   onClick={() => setDraftState(null)}
                   className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
                 >
                   Back to Divisions
                 </button>
+
                 <button
                   onClick={resetApp}
                   className="px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800"
@@ -574,11 +581,7 @@ const [divisions, setDivisions] = useState<any[]>([
 
             <div className="bg-gradient-to-r from-blue-900 to-blue-950 border-l-4 border-yellow-500 p-4 mb-4 rounded">
               <p className="text-lg font-semibold text-yellow-400">Now Drafting: {currentTeam?.name || '—'}</p>
-              {oldestAge && (
-                <p className="text-sm text-yellow-200 mt-1">
-                  Current Draft Priority: {oldestAge} year olds ({draftState.availablePlayers.filter((p: any) => p.age === oldestAge).length} remaining)
-                </p>
-              )}
+              {/* Intentionally no age display */}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -594,18 +597,6 @@ const [divisions, setDivisions] = useState<any[]>([
                       className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
-                  <select
-                    value={filterAge}
-                    onChange={(e) => setFilterAge(e.target.value)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">All Ages</option>
-                    {availableAges.map((age: number) => (
-                      <option key={age} value={String(age)}>
-                        {age} years old
-                      </option>
-                    ))}
-                  </select>
                 </div>
 
                 <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
@@ -622,8 +613,9 @@ const [divisions, setDivisions] = useState<any[]>([
                         <div className="flex justify-between items-center">
                           <div>
                             <p className="font-bold text-lg">ID: {p['Evaluation ID']}</p>
-                            <p className="text-sm text-gray-600">Age: {p.age} | Gender: {p['Player Gender']}</p>
-                            <p className="text-xs text-gray-500">{p['Player First Name']} {p['Player Last Name']}</p>
+                            <p className="text-sm text-gray-600">
+                              {p['Player First Name']} {p['Player Last Name']}
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -643,7 +635,7 @@ const [divisions, setDivisions] = useState<any[]>([
                       <div className="text-sm mt-1 space-y-1">
                         {team.roster.map((p: any, i: number) => (
                           <div key={i} className="pl-2 text-gray-700">
-                            ID: {p['Evaluation ID']} ({p.age}y)
+                            ID: {p['Evaluation ID']} — {p['Player First Name']} {p['Player Last Name']}
                           </div>
                         ))}
                       </div>
@@ -651,6 +643,7 @@ const [divisions, setDivisions] = useState<any[]>([
                   ))}
                 </div>
               </div>
+
             </div>
           </div>
         </div>
@@ -714,7 +707,7 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                       <div className="text-2xl font-bold text-yellow-400 mt-1">
                         ID: {pick.player}
                       </div>
-                      <div className="text-yellow-100 text-sm">Age {pick.age}</div>
+                      {/* Intentionally no age display */}
                       {pick.siblings && pick.siblings.length > 0 && (
                         <div className="text-yellow-300 text-xs mt-1">
                           + Siblings: {pick.siblings.join(', ')}
@@ -765,15 +758,17 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                       idx === currentTeamIndex ? 'text-blue-900' : 'text-yellow-100'
                     } text-sm`}
                   >
-                    {/* Show ALL picks */}
                     {team.roster.map((p: any, i: number) => (
-                      <div key={i}>ID: {p['Evaluation ID']} ({p.age}y)</div>
+                      <div key={i}>
+                        ID: {p['Evaluation ID']} — {p['Player First Name']} {p['Player Last Name']}
+                      </div>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
           </div>
+
         </div>
       </div>
     </div>
@@ -826,23 +821,12 @@ const PlayerAssignment: React.FC<{
                 <span className="text-sm text-gray-500">• 9–11 year olds → Minors or Majors</span>
               </p>
 
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
-                <p className="text-xs font-mono">
-                  DEBUG: Players needing assignment:
-                  <br />
-                  {needsAssignment
-                    .map(p => `ID:${p['Evaluation ID']} ${p['Player First Name']} ${p['Player Last Name']}: Age=${p.age}, Division="${p.division}"`)
-                    .join('\n')}
-                </p>
-              </div>
-
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b">
                       <th className="text-left p-2">Evaluation ID</th>
                       <th className="text-left p-2">Player Name</th>
-                      <th className="text-left p-2">Age</th>
                       <th className="text-left p-2">Division</th>
                     </tr>
                   </thead>
@@ -851,7 +835,6 @@ const PlayerAssignment: React.FC<{
                       <tr key={p.id} className="border-b hover:bg-gray-50">
                         <td className="p-2 font-semibold">{p['Evaluation ID']}</td>
                         <td className="p-2">{p['Player First Name']} {p['Player Last Name']}</td>
-                        <td className="p-2">{p.age}</td>
                         <td className="p-2">
                           <select
                             value={p.division || ''}
@@ -860,20 +843,19 @@ const PlayerAssignment: React.FC<{
                           >
                             <option value="">Select Division</option>
 
-{p.age === 8 ? (
-  <>
-    <option value="Rookies">Rookies</option>
-    <option value="Minors">Minors</option>
-  </>
-) : (
-  <>
-    <option value="Minors">Minors</option>
-    <option value="Majors">Majors</option>
-    <option value="Intermediate">Intermediate</option>
-    <option value="Juniors">Juniors</option>
-  </>
-)}
-
+                            {p.age === 8 ? (
+                              <>
+                                <option value="Rookies">Rookies</option>
+                                <option value="Minors">Minors</option>
+                              </>
+                            ) : (
+                              <>
+                                <option value="Minors">Minors</option>
+                                <option value="Majors">Majors</option>
+                                <option value="Intermediate">Intermediate</option>
+                                <option value="Juniors">Juniors</option>
+                              </>
+                            )}
                           </select>
                         </td>
                       </tr>
@@ -911,15 +893,16 @@ const TeamSetup: React.FC<{
   players: any[];
   onComplete: (dt: Record<string, string[]>) => void;
 }> = ({ divisions, players, onComplete }) => {
- const [divisionTeams, setDivisionTeams] = useState({
-  Rookies: [], Majors: [], Minors: [], Intermediate: [], Juniors: []
-});
-const [teamCounts, setTeamCounts] = useState({
-  Rookies: 4, Majors: 4, Minors: 4, Intermediate: 4, Juniors: 4
-});
+  const [divisionTeams, setDivisionTeams] = useState<Record<string, string[]>>({
+    Rookies: [], Majors: [], Minors: [], Intermediate: [], Juniors: []
+  });
+
+  const [teamCounts, setTeamCounts] = useState<Record<string, number>>({
+    Rookies: 4, Majors: 4, Minors: 4, Intermediate: 4, Juniors: 4
+  });
 
   const playerCounts = useMemo(() => {
-    const names = ['Rookies', 'Majors', 'Minors','Intermediate', 'Juniors'];
+    const names = ['Rookies', 'Majors', 'Minors', 'Intermediate', 'Juniors'];
     const byDiv: Record<string, number> = {};
     names.forEach(name => {
       byDiv[name] = (players || []).filter(p => p.division === name && !p.drafted).length;
@@ -932,13 +915,13 @@ const [teamCounts, setTeamCounts] = useState({
     setTeamCounts(prev => ({ ...prev, [division]: numTeams }));
     setDivisionTeams(prev => ({
       ...prev,
-      [division]: Array(numTeams).fill('').map((_, i) => prev[division][i] || '')
+      [division]: Array(numTeams).fill('').map((_, i) => prev[division]?.[i] || '')
     }));
   };
 
   const updateTeamName = (division: string, index: number, name: string) => {
     setDivisionTeams(prev => {
-      const updated = [...prev[division]];
+      const updated = [...(prev[division] || [])];
       updated[index] = name;
       return { ...prev, [division]: updated };
     });
@@ -1039,7 +1022,7 @@ const DivisionSelector: React.FC<{
             />
             <div>
               <h2 className="text-2xl font-bold text-blue-900">Select Division to Draft</h2>
-              <p className="text-gray-600">Draft Order: Rookies → Majors → Minors → Juniors</p>
+              <p className="text-gray-600">Draft Order: Rookies → Majors → Minors → Intermediate → Juniors</p>
             </div>
           </div>
 
