@@ -19,6 +19,8 @@ const DEFAULT_DIVISIONS = [
   { name: 'Juniors',      order: 5, teams: [] as string[] },
 ];
 
+const normalizeDivision = (raw: any) => String(raw ?? '').trim();
+
 const LittleLeagueDraft: React.FC = () => {
   const [step, setStep] = useState<Step>('upload');
   const [players, setPlayers] = useState<any[]>([]);
@@ -79,13 +81,19 @@ const LittleLeagueDraft: React.FC = () => {
         const p: any = {};
         headers.forEach((h, i) => (p[h] = vals[i] ?? ''));
         p.id = `player-${idx}`;
-        p.age = calculateAge(p['Player Birth Date']); // keep internally (used for auto-division + draft priority)
 
-        // Auto-assign division
-        if (p.age < 8) p.division = 'Rookies';
-        else if (p.age === 12) p.division = 'Majors';
-        else if (p.age >= 13) p.division = 'Juniors';
-        else p.division = ''; // needs manual assignment
+        // Keep age internally for draft priority/highlight (not displayed anywhere)
+        p.age = calculateAge(p['Player Birth Date']);
+
+        // ✅ Use division from CSV (no birthdate rules)
+        // Supports a few common header variations just in case.
+        const div =
+          p['Division'] ??
+          p['division'] ??
+          p['Player Division'] ??
+          p['Player Division Name'] ??
+          '';
+        p.division = normalizeDivision(div);
 
         return p;
       });
@@ -456,18 +464,13 @@ const LittleLeagueDraft: React.FC = () => {
                 <div className="text-sm text-gray-700">
                   <p className="font-medium mb-1">Required CSV columns:</p>
                   <p className="text-xs">
-                    Evaluation ID, Account First Name, Account Last Name, Player First Name, Player Last Name,
+                    Evaluation ID, Division, Account First Name, Account Last Name, Player First Name, Player Last Name,
                     Player Gender, Player Birth Date, Street Address, City, State, Postal Code, User Email,
                     Cellphone, Jersey Size, Player Allergies
                   </p>
-                  <p className="text-xs mt-2 font-medium">Auto-assignment rules:</p>
-                  <p className="text-xs">• Under 8 → Rookies</p>
-                  <p className="text-xs">• Age 8 → Manual (Rookies or Minors)</p>
-                  <p className="text-xs">• 9–11 → Manual (Minors or Majors)</p>
-                  <p className="text-xs">• Age 12 → Majors</p>
-                  <p className="text-xs">• 13+ → Juniors</p>
                   <p className="text-xs mt-2 text-gray-600">
-                    Note: Ages are used internally for division rules and draft priority, but are not displayed anywhere in the UI.
+                    Note: Division is taken directly from the CSV. Ages are used internally for draft priority/highlighting,
+                    but are not displayed anywhere in the UI.
                   </p>
                 </div>
               </div>
@@ -518,7 +521,6 @@ const LittleLeagueDraft: React.FC = () => {
               </div>
 
               <div className="flex gap-2 flex-wrap items-center">
-                {/* Restart current division draft */}
                 <button
                   onClick={restartCurrentDivision}
                   className="flex items-center gap-2 px-4 py-2 bg-red-700 text-white font-semibold rounded-lg hover:bg-red-800"
@@ -526,7 +528,6 @@ const LittleLeagueDraft: React.FC = () => {
                   ⟲ Restart Draft
                 </button>
 
-                {/* Open Big Screen in a new window with ?view=display */}
                 <button
                   onClick={() => {
                     const url = `${window.location.origin}${window.location.pathname}?view=display`;
@@ -581,7 +582,6 @@ const LittleLeagueDraft: React.FC = () => {
 
             <div className="bg-gradient-to-r from-blue-900 to-blue-950 border-l-4 border-yellow-500 p-4 mb-4 rounded">
               <p className="text-lg font-semibold text-yellow-400">Now Drafting: {currentTeam?.name || '—'}</p>
-              {/* Intentionally no age display */}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -685,7 +685,7 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
             Round {draftState.currentRound} • Pick {draftState.currentPick + 1}
           </div>
 
-          <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
+        <div className="bg-gradient-to-r from-yellow-500 to-yellow-400 rounded-xl p-8 text-center shadow-2xl">
             <div className="text-xl font-semibold text-blue-950 mb-2">NOW DRAFTING</div>
             <div className="text-6xl font-bold text-blue-950">
               {currentTeam?.name || '—'}
@@ -707,7 +707,6 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                       <div className="text-2xl font-bold text-yellow-400 mt-1">
                         ID: {pick.player}
                       </div>
-                      {/* Intentionally no age display */}
                       {pick.siblings && pick.siblings.length > 0 && (
                         <div className="text-yellow-300 text-xs mt-1">
                           + Siblings: {pick.siblings.join(', ')}
@@ -806,7 +805,7 @@ const PlayerAssignment: React.FC<{
           {autoAssigned.length > 0 && (
             <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
               <p className="text-sm font-medium text-green-800">
-                ✓ {autoAssigned.length} players auto-assigned (Under 8 → Rookies, Age 12 → Majors, 13+ → Juniors)
+                ✓ {autoAssigned.length} players already assigned from CSV
               </p>
             </div>
           )}
@@ -815,10 +814,6 @@ const PlayerAssignment: React.FC<{
             <>
               <p className="text-gray-600 mb-4">
                 Assign the remaining {needsAssignment.length} players to their divisions:
-                <br />
-                <span className="text-sm text-gray-500">• 8 year olds → Rookies or Minors</span>
-                <br />
-                <span className="text-sm text-gray-500">• 9–11 year olds → Minors or Majors</span>
               </p>
 
               <div className="overflow-x-auto">
@@ -842,20 +837,11 @@ const PlayerAssignment: React.FC<{
                             className="px-2 py-1 border border-gray-300 rounded"
                           >
                             <option value="">Select Division</option>
-
-                            {p.age === 8 ? (
-                              <>
-                                <option value="Rookies">Rookies</option>
-                                <option value="Minors">Minors</option>
-                              </>
-                            ) : (
-                              <>
-                                <option value="Minors">Minors</option>
-                                <option value="Majors">Majors</option>
-                                <option value="Intermediate">Intermediate</option>
-                                <option value="Juniors">Juniors</option>
-                              </>
-                            )}
+                            <option value="Rookies">Rookies</option>
+                            <option value="Minors">Minors</option>
+                            <option value="Majors">Majors</option>
+                            <option value="Intermediate">Intermediate</option>
+                            <option value="Juniors">Juniors</option>
                           </select>
                         </td>
                       </tr>
