@@ -968,10 +968,11 @@ const DisplayBoard: React.FC<{ draftState: any; onBack: () => void }> = ({ draft
                     } text-sm`}
                   >
                     {team.roster.map((p: any, i: number) => (
-                      <div key={i}>
-                        ID: {p['Evaluation ID']} — {p['Player First Name']} {p['Player Last Name']}
-                      </div>
-                    ))}
+  <div key={i}>
+    ID: {p['Evaluation ID']}
+  </div>
+))}
+
                   </div>
                 </div>
               ))}
